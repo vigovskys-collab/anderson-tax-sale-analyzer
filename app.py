@@ -1,7 +1,8 @@
-import io,re,requests
+import io,re,requests,json,html
 from urllib.parse import quote_plus
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 OFFICIAL_XLSX_URL='https://www.andersoncountysc.org/wp-content/uploads/2026/10/2026TSSecondAD.xlsx'
 COUNTY='https://www.andersoncountysc.org/'
@@ -24,7 +25,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • corrected county TMS matching • GIS parcel research')
+st.caption('2026 tax-sale screening • browser GIS parcel research • no server-side county GIS dependency')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -78,74 +79,73 @@ def normalized_key(x):
     c=canonical_tms(x)
     return digits(c) if c else digits(x)
 
-@st.cache_data(ttl=1800,show_spinner=False)
-def gis_query(url, where, outfields='*'):
-    p={'where':where,'outFields':outfields,'returnGeometry':'true','outSR':'4326','f':'json'}
-    try:
-        r=requests.get(url,params=p,timeout=35)
-        if r.status_code!=200: return [],f'HTTP {r.status_code}'
-        j=r.json()
-        if 'error' in j: return [],str(j['error'])
-        return j.get('features',[]),''
-    except Exception as e:
-        return [],str(e)
-
-@st.cache_data(ttl=1800,show_spinner=False)
-def parcel_lookup(keys):
-    keys=list(dict.fromkeys([k for k in keys if k]))
-    rows=[]; errors=[]; source=''
-    # County's Opengov parcel layer exposes TMS, TMS_PAD, Long and Lat and polygon geometry.
-    for start in range(0,len(keys),60):
-        batch=keys[start:start+60]
-        quoted=','.join("'"+k.replace("'","''")+"'" for k in batch)
-        where=f"TMS IN ({quoted}) OR TMS_PAD IN ({quoted})"
-        feats,err=gis_query(PARCEL_PRIMARY,where)
-        if err: errors.append(f'Opengov batch {start//60+1}: {err}')
-        if feats:
-            source='Opengov/MAT Parcels'
-            for f in feats:
-                a=f.get('attributes',{}).copy(); a['_geom']=f.get('geometry',{})
-                a['_source']=source
-                a['_matchkey']=normalized_key(a.get('TMS') or a.get('TMS_PAD'))
-                rows.append(a)
-    # Fallback to the NewPropertyViewer parcel layer if the first layer returns nothing.
-    missing=[k for k in keys if not any(r.get('_matchkey')==k for r in rows)]
-    for start in range(0,len(missing),60):
-        batch=missing[start:start+60]
-        quoted=','.join("'"+canonical_tms(k).replace("'","''")+"'" for k in batch)
-        where=f"TMS IN ({quoted})"
-        feats,err=gis_query(PARCEL_FALLBACK,where)
-        if err: errors.append(f'NewPropertyViewer batch {start//60+1}: {err}')
-        if feats:
-            source='NewPropertyViewer Parcels'
-            for f in feats:
-                a=f.get('attributes',{}).copy(); a['_geom']=f.get('geometry',{})
-                a['_source']=source
-                a['_matchkey']=normalized_key(a.get('TMS'))
-                rows.append(a)
-    return rows,source,errors
-
-def centroid_from_geom(g):
-    if not isinstance(g,dict): return None,None
-    if g.get('x') is not None and g.get('y') is not None: return float(g['y']),float(g['x'])
-    rings=g.get('rings') or []
-    pts=[p for ring in rings for p in ring if isinstance(p,(list,tuple)) and len(p)>=2]
-    if not pts: return None,None
-    return sum(p[1] for p in pts)/len(pts),sum(p[0] for p in pts)/len(pts)
-
-@st.cache_data(ttl=1800,show_spinner=False)
-def spatial_enrich(points):
-    out={}
-    for key,lat,lon in points:
-        geom={'x':lon,'y':lat}
-        item={}
-        for name,url,distance in [('zoning',ZONING,15),('flood',FLOOD,15),('easement',EASE,15),('rivers',RIVERS,100),('lakes',OVERLAYS,100),('sales',SALES,2000)]:
-            p={'where':'1=1','outFields':'*','returnGeometry':'false','outSR':'4326','f':'json','geometry':str(geom).replace("'",'"'),'geometryType':'esriGeometryPoint','inSR':'4326','spatialRel':'esriSpatialRelIntersects','distance':distance,'units':'esriSRUnit_Meter'}
-            try:
-                j=requests.get(url,params=p,timeout=20).json(); item[name]=[f.get('attributes',{}) for f in j.get('features',[])]
-            except Exception: item[name]=[]
-        out[key]=item
-    return out
+def browser_map(rows, title='🗺️ County GIS parcel map'):
+    """Render the county GIS entirely in the user's browser.
+    This intentionally avoids server-side requests to the county GIS host, because
+    Streamlit Cloud cannot reliably reach that host in this deployment.
+    """
+    payload=[]
+    for idx,row in rows.iterrows():
+        tms=str(row.get('TMS_CANONICAL') or '').strip()
+        if not tms: continue
+        payload.append({
+            'idx':int(idx), 'tms':tms, 'owner':str(row.get('Owner') or ''),
+            'address':str(row.get('Research Address') or row.get('Address') or ''),
+            'bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
+            'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
+        })
+    # Prevent a </script> sequence from ever escaping into the page.
+    data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
+    gis_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
+    viewer_url='https://propertyviewer.andersoncountysc.org/'
+    html_doc="""<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+<style>
+html,body,#map{{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}}
+#map{{min-height:620px;background:#eef2f5}}
+#status{{position:absolute;z-index:1000;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:82%}}
+#legend{{position:absolute;z-index:1000;right:12px;bottom:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:12px}}
+.good{{color:#087f23}} .bad{{color:#a40000}}
+</style></head><body>
+<div id="map"></div><div id="status">Loading county GIS…</div><div id="legend">🟢 Tax-sale parcel &nbsp; | &nbsp; Draw a rectangle/polygon to filter visible parcels</div>
+<script>window.TAXSALE={data:__DATA__,gis:__GIS__,viewer:__VIEWER__};</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+const S=window.TAXSALE, map=L.map('map').setView([34.5034,-82.6501],10);
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'© OpenStreetMap contributors'}}).addTo(map);
+const group=L.featureGroup().addTo(map), drawn=new L.FeatureGroup().addTo(map); 
+const taxByTms=new Map(S.data.map(x=>[x.tms,x]));
+let features=[];
+const status=document.getElementById('status');
+function esc(x){{return String(x??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
+function popup(p){{const x=taxByTms.get(p.TMS)||{{}};return `<b>${{esc(p.TMS)}}</b><br>${{esc(p.TAXOWNSTR||x.owner||'')}}<br>${{esc(p.PHYS_ADDR||x.address||'')}}<br>Opening bid: ${{x.bid==null?'—':x.bid.toLocaleString()}}<br>GIS market: ${{p.MRKT_VALUE==null?'—':Number(p.MRKT_VALUE).toLocaleString()}}`;}}
+function addFeature(f){{const p=f.properties||{{}};const layer=L.geoJSON(f,{{style:{{color:'#00a83b',weight:3,fillOpacity:.28}},onEachFeature:(ff,l)=>l.bindPopup(popup(ff.properties||{{}}))}});layer.addTo(group);return layer;}}
+async function queryBatch(batch){{
+ const where='TMS IN ('+batch.map(x=>`'${{x.tms.replaceAll("'","''")}}'`).join(',')+')';
+ const u=S.gis+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,PHYS_ADDR,MRKT_VALUE,CPLAT,RATIO,TAXOWNSTR')+'&returnGeometry=true&outSR=4326&f=geojson';
+ const r=await fetch(u,{{mode:'cors'}}); if(!r.ok) throw new Error('HTTP '+r.status); const j=await r.json(); return j.features||[];
+}}
+async function loadGIS(){{
+ const batches=[]; for(let i=0;i<S.data.length;i+=40)batches.push(S.data.slice(i,i+40));
+ let matched=0;
+ for(let i=0;i<batches.length;i++){{
+   try{{const fs=await queryBatch(batches[i]); fs.forEach(f=>{{features.push(f);addFeature(f);}});matched+=fs.length;status.innerHTML=`County GIS: <span class="good"><b>${{matched}}</b> of ${{S.data.length}} tax-sale parcels matched</span>`;}}
+   catch(e){{status.innerHTML=`<span class="bad"><b>Browser GIS connection failed.</b></span><br>${{esc(e.message)}}<br><a href="${{S.viewer}}" target="_blank">Open Anderson County Property Viewer</a>`; return;}}
+ }}
+ if(group.getLayers().length) map.fitBounds(group.getBounds().pad(.08));
+ else status.innerHTML=`<span class="bad"><b>0 parcels matched.</b></span><br>Check the TMS values or open the county viewer.`;
+}}
+const dc=new L.Control.Draw({{draw:{{polyline:false,circle:false,circlemarker:false,marker:false},polygon:{{allowIntersection:false,showArea:true}},rectangle:true}},edit:{{featureGroup:drawn}}}});
+map.addControl(dc);
+map.on(L.Draw.Event.CREATED,e=>{{drawn.clearLayers();drawn.addLayer(e.layer);let n=0;group.eachLayer(l=>{{try{{if(e.layer.getBounds().intersects(l.getBounds()))n++;}}catch(_){{}}}});status.innerHTML=`GIS loaded: ${{group.getLayers().length}} parcels. <b>${{n}}</b> parcel(s) intersect your drawn area.`;}});
+map.on('moveend',()=>{{if(group.getLayers().length){{const b=map.getBounds();let n=0;group.eachLayer(l=>{{try{{if(b.intersects(l.getBounds()))n++;}}catch(_){{}}}});status.innerHTML=`GIS loaded: <b>${{group.getLayers().length}}</b> matched. <b>${{n}}</b> are in the visible map area.`;}}}});
+loadGIS();
+</script></body></html>"""
+    html_doc=html_doc.replace("__DATA__",data_json).replace("__GIS__",json.dumps(gis_url)).replace("__VIEWER__",json.dumps(viewer_url))
+    components.html(html_doc,height=650,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
 if 'fav' not in st.session_state: st.session_state.fav=set()
@@ -201,49 +201,13 @@ df['Mobile']=(df.Type+' '+df.Address).str.lower().str.contains(r'mobile|manufact
 with st.expander('🔎 GIS diagnostics',expanded=True):
     st.write(f'Tax-sale rows loaded: **{len(df):,}**')
     st.write(f'Rows with canonical TMS: **{df.TMS_CANONICAL.ne("").sum():,}**')
-    example=df.loc[df.TMS_CANONICAL.ne(''),'TMS_CANONICAL'].iloc[0] if df.TMS_CANONICAL.ne('').any() else 'none'
-    st.write(f'Example canonical TMS: **{example}**')
-    if example=='045-00-01-008': st.success('TMS conversion check passed: 450001008.0 → 045-00-01-008')
+    examples=df.loc[df.TMS_CANONICAL.ne(''),'TMS_CANONICAL'].head(3).tolist()
+    st.write('Example canonical TMS: **'+(', '.join(examples) if examples else 'none')+'**')
+    st.success('Spreadsheet/TMS parsing is working. County GIS is loaded by your browser in the map below — the Streamlit server no longer contacts the GIS server.')
 
-with st.spinner('Matching tax-sale TMS numbers to Anderson County GIS parcels…'):
-    pars,source,errors=parcel_lookup(df.TMS_KEY.tolist())
-
-pd_gis=pd.DataFrame([p for p in pars if p.get('_matchkey')])
-if len(pd_gis):
-    pd_gis=pd_gis.drop_duplicates('_matchkey')
-    def gfield(patterns): return find_col(pd_gis,patterns)
-    def pick(*names):
-        for n in names:
-            if n in pd_gis.columns: return n
-        return None
-    addrcol=pick('PHYS_ADDR') or gfield([r'phys.?addr',r'address'])
-    valcol=pick('MRKT_VALUE') or gfield([r'mrkt.?value',r'market.?value'])
-    acg=pick('ACRES') or gfield([r'^acres$'])
-    latcol=pick('Lat') or pick('LAT')
-    loncol=pick('Long') or pick('LON')
-    outg=pd.DataFrame({'TMS_KEY':pd_gis['_matchkey']})
-    outg['GIS Address']=pd_gis[addrcol] if addrcol else pd.NA
-    outg['GIS Market']=pd.to_numeric(pd_gis[valcol],errors='coerce') if valcol else pd.NA
-    outg['GIS Acres']=pd.to_numeric(pd_gis[acg],errors='coerce') if acg else pd.NA
-    outg['GIS Ratio']=pd_gis['RATIO'] if 'RATIO' in pd_gis.columns else pd.NA
-    outg['_lat']=pd.to_numeric(pd_gis[latcol],errors='coerce') if latcol else pd.NA
-    outg['_lon']=pd.to_numeric(pd_gis[loncol],errors='coerce') if loncol else pd.NA
-    outg['_geom']=pd_gis['_geom']
-    outg['_source']=pd_gis['_source']
-    df=df.merge(outg.drop_duplicates('TMS_KEY'),on='TMS_KEY',how='left')
-else:
-    for c in ['GIS Address','GIS Market','GIS Acres','GIS Ratio','_lat','_lon','_geom','_source']: df[c]=pd.NA
-
-with st.expander('📊 GIS match results'):
-    matched=df['GIS Market'].notna() | df['_lat'].notna() | df['_geom'].notna()
-    st.metric('GIS matched',int(matched.sum()))
-    st.write(f'GIS source: **{source or "none"}**')
-    if errors: st.warning('GIS request diagnostics: '+' | '.join(errors[:4]))
-    if matched.any():
-        ex=df.loc[matched,['TMS','TMS_CANONICAL','GIS Address','GIS Market','_lat','_lon']].head(5).copy()
-        st.dataframe(ex,use_container_width=True,hide_index=True)
-    else:
-        st.error('No GIS parcels matched. The app is showing the exact request errors above instead of silently hiding them.')
+# GIS values are intentionally browser-side in v8. Keep columns so the ranking/filter UI remains stable.
+for c in ['GIS Address','GIS Market','GIS Acres','GIS Ratio','_lat','_lon','_geom','_source']:
+    df[c]=pd.NA
 
 df['Research Address']=df['Address'].where(df['Address'].str.strip().ne(''),df['GIS Address'].fillna(''))
 df['Bid/Assessed']=df['Opening Bid']/df['Assessed'].replace(0,pd.NA)
@@ -260,8 +224,8 @@ with st.expander('🔎 Filters',expanded=True):
     ma=c3.number_input('Minimum acres',0.,10000.,0.,.1)
     mx=c4.number_input('Maximum acres',0.,10000.,10000.,.1)
     c5,c6=st.columns(2)
-    max_gis=float(pd.to_numeric(df['GIS Market'],errors='coerce').max() or 0)
-    minval=c5.number_input('Minimum GIS market value',0.,max(1.,max_gis),0.,1000.)
+    c5.info('GIS value filtering is temporarily disabled because parcel data now loads directly in your browser.')
+    minval=0
     typ=c6.selectbox('Property type',['All','Land / real estate','Mobile homes'])
 
 mask=pd.Series(True,index=df.index)
@@ -269,7 +233,7 @@ if q:
     s=df.fillna('').astype(str).agg(' | '.join,axis=1).str.lower(); mask &= s.str.contains(re.escape(q.lower()),regex=True,na=False)
 mask &= (df['Opening Bid'].between(*br) | df['Opening Bid'].isna())
 mask &= df['Acres'].fillna(0).between(ma,mx)
-mask &= pd.to_numeric(df['GIS Market'],errors='coerce').fillna(0)>=minval
+mask &= (pd.to_numeric(df['GIS Market'],errors='coerce').fillna(0)>=minval) | df['GIS Market'].isna()
 mask &= ((df['Bid/Market'].fillna(0)*100<=rm)|df['Bid/Market'].isna())
 if typ=='Mobile homes': mask &= df.Mobile
 if typ=='Land / real estate': mask &= ~df.Mobile
@@ -283,18 +247,19 @@ def score(row):
     elif pd.notna(row['Bid/Assessed']): s+=max(-30,min(30,(.35-float(row['Bid/Assessed']))*70))
     if pd.notna(row['Acres']): s+=min(12,float(row['Acres'])*1.5)
     if row.Mobile: s-=12
-    if pd.isna(row['GIS Market']): s-=10
     if row['_geom'] is not pd.NA and isinstance(row['_geom'],dict): s+=3
     return round(max(0,min(100,s)))
 def risk_for(row):
     flags=[]
-    if pd.isna(row['GIS Market']): flags.append('NO GIS VALUE')
-    if pd.isna(row['_lat']) or pd.isna(row['_lon']): flags.append('NO GIS LOCATION')
     if row.Mobile: flags.append('MOBILE')
     return ' / '.join(flags) if flags else 'LOWER AUTOMATED RISK'
 r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.sort_values(['Deal Score','Bid/Market'],ascending=[False,True])
 
-m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS matched',int((r['GIS Market'].notna() | r['_lat'].notna()).sum())); m3.metric('With parcel geometry',int(r['_geom'].apply(lambda x:isinstance(x,dict)).sum()))
+m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
+
+st.subheader('🗺️ Anderson County parcel map')
+st.caption('The map below contacts the county GIS directly from your phone/browser. Use the draw tools to inspect a rectangle or polygon.')
+if len(r): browser_map(r.head(1562))
 
 st.subheader('🏆 Top opportunities')
 if len(r)==0: st.warning('No properties match the current filters.')
@@ -316,15 +281,12 @@ if len(r):
     row=r.loc[idx]
     st.markdown(f"### {row['TMS_CANONICAL'] or row['TMS']} — {row['Owner'] or 'Unknown owner'}")
     st.write(row['Research Address'] or 'No address listed')
-    if pd.notna(row['_lat']) and pd.notna(row['_lon']):
-        street=f'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row._lat},{row._lon}'
+    if str(row['Research Address']).strip():
         maps=f'https://www.google.com/maps/search/?api=1&query={quote_plus(str(row["Research Address"])+", Anderson County, SC")}'
-        a,b=st.columns(2); a.link_button('🚗 Street View',street,use_container_width=True); b.link_button('🗺️ Google Maps',maps,use_container_width=True)
+        a,b=st.columns(2); b.link_button('🗺️ Google Maps',maps,use_container_width=True)
     a,b=st.columns(2); a.link_button('🏛️ County Property Viewer',VIEWER,use_container_width=True); b.link_button('📑 ACPASS',ACPASS,use_container_width=True)
-    st.markdown(f"**GIS source:** {row['_source'] if pd.notna(row['_source']) else 'none'}")
-    if isinstance(row['_geom'],dict):
-        st.success('County parcel boundary matched.')
-    else: st.warning('No county parcel boundary for this TMS.')
+    st.markdown('**GIS:** browser-connected county parcel map above')
+    st.info('Parcel boundary and county GIS value are displayed in the browser GIS map above.')
 
 st.divider()
 st.subheader('💰 Maximum Bid Calculator')
@@ -345,7 +307,6 @@ if len(r):
         if pd.isna(value) or value<=0: value=pd.to_numeric(prop['Assessed'],errors='coerce')
         if pd.isna(value) or value<=0: recs.append([i,None,None,'PASS — insufficient value data']); continue
         risk=float(risk_reserve_pct)
-        if pd.isna(prop['_lat']): risk+=5
         if prop.Mobile: risk+=5
         value=float(value); tx=value*float(transaction_cost_pct)/100
         maximum=max(0.,min(value-float(repair_budget)-float(holding_cost)-value*risk/100-tx-float(target_margin),value*float(max_ltv_pct)/100))
@@ -363,5 +324,5 @@ if len(r):
         st.info(f"${rb['Estimated Value']:,.0f} estimated value − ${repair_budget:,.0f} repairs − ${holding_cost:,.0f} holding − risk reserve − transaction reserve − ${target_margin:,.0f} desired margin = **${rb['Maximum Bid']:,.0f} max bid**.")
 
 out=r.copy(); out['Favorite']=False; out['Notes']=''
-st.download_button('📥 Download ranked shortlist CSV',out.to_csv(index=False).encode('utf-8-sig'),'anderson_2026_ranked_shortlist_v7.csv','text/csv',use_container_width=True)
+st.download_button('📥 Download ranked shortlist CSV',out.to_csv(index=False).encode('utf-8-sig'),'anderson_2026_ranked_shortlist_v8.csv','text/csv',use_container_width=True)
 st.caption('Screening signals must be independently verified before bidding. Tax-sale properties are sold as-is/where-is.')
