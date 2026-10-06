@@ -144,6 +144,7 @@ map.on(L.Draw.Event.CREATED,e=>{{drawn.clearLayers();drawn.addLayer(e.layer);let
 map.on('moveend',()=>{{if(group.getLayers().length){{const b=map.getBounds();let n=0;group.eachLayer(l=>{{try{{if(b.intersects(l.getBounds()))n++;}}catch(_){{}}}});status.innerHTML=`GIS loaded: <b>${{group.getLayers().length}}</b> matched. <b>${{n}}</b> are in the visible map area.`;}}}});
 loadGIS();
 </script></body></html>"""
+    html_doc=html_doc.replace("{{","{").replace("}}","}")
     html_doc=html_doc.replace("__DATA__",data_json).replace("__GIS__",json.dumps(gis_url)).replace("__VIEWER__",json.dumps(viewer_url))
     components.html(html_doc,height=650,scrolling=False)
 
