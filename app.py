@@ -122,17 +122,18 @@ let features=[];
 const status=document.getElementById('status');
 function esc(x){{return String(x??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
 function popup(p){{const x=taxByTms.get(p.TMS)||{{}};return `<b>${{esc(p.TMS)}}</b><br>${{esc(p.TAXOWNSTR||x.owner||'')}}<br>${{esc(p.PHYS_ADDR||x.address||'')}}<br>Opening bid: ${{x.bid==null?'—':x.bid.toLocaleString()}}<br>GIS market: ${{p.MRKT_VALUE==null?'—':Number(p.MRKT_VALUE).toLocaleString()}}`;}}
-function addFeature(f){{const p=f.properties||{{}};const layer=L.geoJSON(f,{{style:{{color:'#00a83b',weight:3,fillOpacity:.28}},onEachFeature:(ff,l)=>l.bindPopup(popup(ff.properties||{{}}))}});layer.addTo(group);return layer;}}
+function addArcFeature(f){{const a=f.attributes||{{}},g=f.geometry||{{}},props=a; const gj={{type:'Feature',properties:props,geometry:{{type:'Polygon',coordinates:g.rings||[]}}}}; const layer=L.geoJSON(gj,{{style:{{color:'#00a83b',weight:2,fillOpacity:.24}},onEachFeature:(ff,l)=>l.bindPopup(popup(ff.properties||{{}}))}});layer.addTo(group);return layer;}}
+function jsonp(url,timeout=12000){{return new Promise((resolve,reject)=>{{const cb='gis_cb_'+Date.now()+'_'+Math.floor(Math.random()*1000000); const script=document.createElement('script'); let done=false; const timer=setTimeout(()=>{{if(done)return;done=true;cleanup();reject(new Error('GIS request timed out (12 seconds).'))}},timeout); function cleanup(){{clearTimeout(timer);delete window[cb];script.remove();}} window[cb]=(data)=>{{if(done)return;done=true;cleanup(); if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.')); else resolve(data);}}; script.onerror=()=>{{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'))}}; script.src=url+(url.includes('?')?'&':'?')+'callback='+cb; document.head.appendChild(script);}});}}
 async function queryBatch(batch){{
  const where='TMS IN ('+batch.map(x=>`'${{x.tms.replaceAll("'","''")}}'`).join(',')+')';
- const u=S.gis+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,PHYS_ADDR,MRKT_VALUE,CPLAT,RATIO,TAXOWNSTR')+'&returnGeometry=true&outSR=4326&f=geojson';
- const r=await fetch(u,{{mode:'cors'}}); if(!r.ok) throw new Error('HTTP '+r.status); const j=await r.json(); return j.features||[];
+ const u=S.gis+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,PHYS_ADDR,MRKT_VALUE,CPLAT,RATIO,TAXOWNSTR')+'&returnGeometry=true&outSR=4326&f=json';
+ const j=await jsonp(u); return j.features||[];
 }}
 async function loadGIS(){{
- const batches=[]; for(let i=0;i<S.data.length;i+=40)batches.push(S.data.slice(i,i+40));
+ const batches=[]; for(let i=0;i<S.data.length;i+=20)batches.push(S.data.slice(i,i+20));
  let matched=0;
  for(let i=0;i<batches.length;i++){{
-   try{{const fs=await queryBatch(batches[i]); fs.forEach(f=>{{features.push(f);addFeature(f);}});matched+=fs.length;status.innerHTML=`County GIS: <span class="good"><b>${{matched}}</b> of ${{S.data.length}} tax-sale parcels matched</span>`;}}
+   try{{const fs=await queryBatch(batches[i]); fs.forEach(f=>{{features.push(f);addArcFeature(f);}});matched+=fs.length;status.innerHTML=`County GIS: <span class="good"><b>${{matched}}</b> of ${{S.data.length}} tax-sale parcels matched</span>`;}}
    catch(e){{status.innerHTML=`<span class="bad"><b>Browser GIS connection failed.</b></span><br>${{esc(e.message)}}<br><a href="${{S.viewer}}" target="_blank">Open Anderson County Property Viewer</a>`; return;}}
  }}
  if(group.getLayers().length) map.fitBounds(group.getBounds().pad(.08));
@@ -195,7 +196,7 @@ df['TMS_CANONICAL']=df.TMS.map(canonical_tms)
 df['TMS_KEY']=df.TMS_CANONICAL.map(normalized_key)
 # If acreage is embedded in the property description, extract it.
 missing_acres=df['Acres'].isna()
-extracted=df['Address'].str.extract(r'(\d+(?:\.\d+)?)\s*(?:A|AC|ACRES)\b',flags=re.I,expand=False)
+extracted=df['Address'].str.extract(r'((?:\d+(?:\.\d+)?|\.\d+))\s*(?:A|AC|ACRES)\b',flags=re.I,expand=False)
 df.loc[missing_acres,'Acres']=pd.to_numeric(extracted[missing_acres],errors='coerce')
 df['Mobile']=(df.Type+' '+df.Address).str.lower().str.contains(r'mobile|manufactured|mh\b',regex=True)
 
@@ -288,6 +289,30 @@ if len(r):
     a,b=st.columns(2); a.link_button('🏛️ County Property Viewer',VIEWER,use_container_width=True); b.link_button('📑 ACPASS',ACPASS,use_container_width=True)
     st.markdown('**GIS:** browser-connected county parcel map above')
     st.info('Parcel boundary and county GIS value are displayed in the browser GIS map above.')
+
+    st.markdown('### 🕯️ Obituary / deceased-owner cross-check')
+    owner=str(row['Owner'] or '').strip()
+    owner_upper=owner.upper()
+    non_person_terms=['LLC','L.L.C','INC','INC.','CORP','CORPORATION','LP','L.P','LLP','L.L.P','TRUST','TRUSTEE','ESTATE','HEIRS','ET AL','CHURCH','MINISTRIES','ASSOCIATION','BANK','COUNTY OF','CITY OF','UNIVERSITY','SCHOOL','COMPANY','CO.']
+    looks_like_entity=any(t in owner_upper for t in non_person_terms)
+    if not owner:
+        st.info('No owner name is available for an obituary search.')
+    elif looks_like_entity:
+        st.info('This owner appears to be an entity, trust, estate, or organization rather than an individual. An obituary search is usually not meaningful; investigate the entity/estate records instead.')
+    else:
+        # We intentionally make this an on-demand browser search rather than scraping obituary sites.
+        # Obituary indexes are incomplete, and several sources prohibit automated scraping.
+        qname=quote_plus(f'"{owner}" Anderson South Carolina obituary')
+        qlegacy=quote_plus(f'"{owner}" Anderson SC obituary')
+        qe=quote_plus(f'"{owner}" Anderson SC death obituary')
+        a,b,c=st.columns(3)
+        a.link_button('🔎 Search Legacy',f'https://www.google.com/search?q=site%3Alegacy.com+{qlegacy}',use_container_width=True)
+        b.link_button('🔎 Search Echovita',f'https://www.google.com/search?q=site%3Aechovita.com+{qe}',use_container_width=True)
+        c.link_button('🔎 Search local web',f'https://www.google.com/search?q={qname}',use_container_width=True)
+        a,b=st.columns(2)
+        a.link_button('📚 Anderson Library obituary index','https://www.andersonlibrary.org/local-history-genealogy/obituary-index',use_container_width=True)
+        b.link_button('📰 Anderson obituaries on Legacy','https://www.legacy.com/us/obituaries/local/south-carolina/anderson',use_container_width=True)
+        st.caption('How to interpret results: **Likely deceased** only when the obituary clearly matches the owner’s identity. **No obituary found** does not mean the owner is alive. Verify the person using age, relatives, city, property address, and county/probate records before relying on this flag.')
 
 st.divider()
 st.subheader('💰 Maximum Bid Calculator')
