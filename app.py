@@ -89,7 +89,7 @@ def browser_map(rows, title='🗺️ County GIS parcel map'):
         tms=str(row.get('TMS_CANONICAL') or '').strip()
         if not tms: continue
         payload.append({
-            'idx':int(idx), 'tms':tms, 'owner':str(row.get('Owner') or ''),
+            'idx':int(idx), 'tms':tms, 'key':normalized_key(tms), 'owner':str(row.get('Owner') or ''),
             'address':str(row.get('Research Address') or row.get('Address') or ''),
             'bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
             'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
@@ -117,21 +117,22 @@ html,body,#map{{height:100%;margin:0;font-family:system-ui,-apple-system,sans-se
 const S=window.TAXSALE, map=L.map('map').setView([34.5034,-82.6501],10);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'© OpenStreetMap contributors'}}).addTo(map);
 const group=L.featureGroup().addTo(map), drawn=new L.FeatureGroup().addTo(map); 
-const taxByTms=new Map(S.data.map(x=>[x.tms,x]));
+const taxByTms=new Map(S.data.map(x=>[x.key,x]));
 let features=[];
 const status=document.getElementById('status');
+function normalizedKey(x){{return String(x??'').replace(/[^0-9]/g,'');}}
 function esc(x){{return String(x??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
-function popup(p){{const x=taxByTms.get(p.TMS)||{{}};return `<b>${{esc(p.TMS)}}</b><br>${{esc(p.TAXOWNSTR||x.owner||'')}}<br>${{esc(p.PHYS_ADDR||x.address||'')}}<br>Opening bid: ${{x.bid==null?'—':x.bid.toLocaleString()}}<br>GIS market: ${{p.MRKT_VALUE==null?'—':Number(p.MRKT_VALUE).toLocaleString()}}`;}}
+function popup(p){{const x=taxByTms.get(normalizedKey(p.TMS))||{{}};return `<b>${{esc(p.TMS)}}</b><br>${{esc(p.TAXOWNSTR||x.owner||'')}}<br>${{esc(p.PHYS_ADDR||x.address||'')}}<br>Opening bid: ${{x.bid==null?'—':x.bid.toLocaleString()}}<br>GIS market: ${{p.MRKT_VALUE==null?'—':Number(p.MRKT_VALUE).toLocaleString()}}`;}}
 function addArcFeature(f){{const a=f.attributes||{{}},g=f.geometry||{{}},props=a; const gj={{type:'Feature',properties:props,geometry:{{type:'Polygon',coordinates:g.rings||[]}}}}; const layer=L.geoJSON(gj,{{style:{{color:'#00a83b',weight:2,fillOpacity:.24}},onEachFeature:(ff,l)=>l.bindPopup(popup(ff.properties||{{}}))}});layer.addTo(group);return layer;}}
 function jsonp(url,timeout=12000){{return new Promise((resolve,reject)=>{{const cb='gis_cb_'+Date.now()+'_'+Math.floor(Math.random()*1000000); const script=document.createElement('script'); let done=false; const timer=setTimeout(()=>{{if(done)return;done=true;cleanup();reject(new Error('GIS request timed out (12 seconds).'))}},timeout); function cleanup(){{clearTimeout(timer);delete window[cb];script.remove();}} window[cb]=(data)=>{{if(done)return;done=true;cleanup(); if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.')); else resolve(data);}}; script.onerror=()=>{{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'))}}; script.src=url+(url.includes('?')?'&':'?')+'callback='+cb; document.head.appendChild(script);}});}}
 async function queryBatch(batch){{
- const where='TMS IN ('+batch.map(x=>`'${{x.tms.replaceAll("'","''")}}'`).join(',')+')';
+ const where='TMS IN ('+batch.map(x=>`'${{x.key.replaceAll("'","''")}}'`).join(',')+')';
  const u=S.gis+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,PHYS_ADDR,MRKT_VALUE,CPLAT,RATIO,TAXOWNSTR')+'&returnGeometry=true&outSR=4326&f=json';
  const j=await jsonp(u); return j.features||[];
 }}
 async function loadGIS(){{
- const batches=[]; for(let i=0;i<S.data.length;i+=20)batches.push(S.data.slice(i,i+20));
- let matched=0;
+ const batches=[]; for(let i=0;i<S.data.length;i+=75)batches.push(S.data.slice(i,i+20));
+ let matched=0; status.innerHTML=`Loading county GIS… <b>0</b> of <b>${{S.data.length}}</b>`;
  for(let i=0;i<batches.length;i++){{
    try{{const fs=await queryBatch(batches[i]); fs.forEach(f=>{{features.push(f);addArcFeature(f);}});matched+=fs.length;status.innerHTML=`County GIS: <span class="good"><b>${{matched}}</b> of ${{S.data.length}} tax-sale parcels matched</span>`;}}
    catch(e){{status.innerHTML=`<span class="bad"><b>Browser GIS connection failed.</b></span><br>${{esc(e.message)}}<br><a href="${{S.viewer}}" target="_blank">Open Anderson County Property Viewer</a>`; return;}}
@@ -194,10 +195,14 @@ df['Tax Year']=textcol(raw,TY)
 df['Type']=textcol(raw,PT)
 df['TMS_CANONICAL']=df.TMS.map(canonical_tms)
 df['TMS_KEY']=df.TMS_CANONICAL.map(normalized_key)
-# If acreage is embedded in the property description, extract it.
-missing_acres=df['Acres'].isna()
-extracted=df['Address'].str.extract(r'((?:\d+(?:\.\d+)?|\.\d+))\s*(?:A|AC|ACRES)\b',flags=re.I,expand=False)
-df.loc[missing_acres,'Acres']=pd.to_numeric(extracted[missing_acres],errors='coerce')
+# Prefer an explicit acreage printed in the property description.
+# This preserves leading decimals such as '.73 AC' as 0.73 rather than 73.
+extracted=df['Address'].astype(str).str.extract(
+    r'(?<![0-9])((?:0?\.[0-9]+|[0-9]+(?:\.[0-9]+)?))\s*(?:A|AC|ACRES)\b',
+    flags=re.I, expand=False
+)
+explicit_acres=pd.to_numeric(extracted,errors='coerce')
+df.loc[explicit_acres.notna(),'Acres']=explicit_acres[explicit_acres.notna()]
 df['Mobile']=(df.Type+' '+df.Address).str.lower().str.contains(r'mobile|manufactured|mh\b',regex=True)
 
 with st.expander('🔎 GIS diagnostics',expanded=True):
