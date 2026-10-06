@@ -83,16 +83,34 @@ def nu(df,c):
 
 def nt(x): return re.sub(r"[^0-9]", "", str(x))
 
+def tms_key(x):
+    digits=nt(x)
+    if not digits: return ""
+    # Anderson TMS values can lose a leading zero when Excel stores them as numbers.
+    if len(digits) < 10: digits=digits.zfill(10)
+    return digits
+
 def tms_variants(x):
     raw=str(x).strip()
     if raw.lower() in ("", "nan", "none"): return []
-    digits=nt(raw); vals=[]
-    for v in (raw,digits):
+    digits=nt(raw)
+    canonical=tms_key(raw)
+    vals=[]
+    for v in (raw,digits,canonical):
         if v and v not in vals: vals.append(v)
-    if len(digits)==10:
-        hy=f"{digits[:3]}-{digits[3:5]}-{digits[5:7]}-{digits[7:]}"
+    if len(canonical)==10:
+        hy=f"{canonical[:3]}-{canonical[3:5]}-{canonical[5:7]}-{canonical[7:]}"
         if hy not in vals: vals.append(hy)
     return vals
+
+def extract_acres(description):
+    s=safe_text(description).upper()
+    # The county tax-sale description commonly embeds acreage as “2.07 AC”, “.73 AC”, etc.
+    m=re.search(r"(?<![A-Z0-9])(?P<n>\d*\.?\d+)\s*(?:ACRES?|AC|A)\b",s)
+    if m:
+        try: return float(m.group("n"))
+        except Exception: pass
+    return float("nan")
 
 def fmt_money(x):
     return f"${float(x):,.0f}" if pd.notna(x) else "—"
@@ -185,21 +203,36 @@ if not st.session_state.data:
 
 raw=xls(st.session_state.data); raw.columns=[str(c).strip() for c in raw.columns]
 T=fc(raw,[r"\btms\b",r"tax.?map",r"map.?number"])
-O=fc(raw,[r"^owner$",r"owner",r"taxpayer"])
+O=fc(raw,[r"^owner$",r"current.?owner",r"owner",r"taxpayer"])
 A=fc(raw,[r"property.?address",r"physical.?address",r"situs",r"street",r"location",r"address"])
+DESC=fc(raw,[r"property.?description",r"description"])
 C=fc(raw,[r"\bcity\b",r"town"])
-B=fc(raw,[r"opening.?bid",r"minimum.?bid",r"open.?bid"])
+B=fc(raw,[r"opening.?bid",r"minimum.?bid",r"open.?bid",r"amount.?due",r"due.?amount",r"^amount$"])
+if B and re.search(r"years?",str(B),re.I): B=None
+if not B:
+    # 2026 county ad labels the sale amount as AMOUNT DUE / DUE 6%.
+    for c in raw.columns:
+        name=str(c).strip().lower()
+        if ("amount" in name and "due" in name) or name in ("amount due", "amount due 6%", "due 6%"):
+            B=c; break
 AV=fc(raw,[r"assessed.?value",r"assessed",r"market.?value",r"appraised"])
 AC=fc(raw,[r"acres?",r"acreage"])
 I=fc(raw,[r"^item$",r"\bitem\b",r"sale.?no"])
-TY=fc(raw,[r"tax.?year",r"delinq"])
+TY=fc(raw,[r"tax.?year",r"delinq",r"years?.?due"])
 PT=fc(raw,[r"property.?type",r"property.?class",r"type",r"mobile"])
 
 df=pd.DataFrame(index=raw.index)
-df["TMS"]=tx(raw,T); df["Item"]=tx(raw,I); df["Owner"]=tx(raw,O); df["Address"]=tx(raw,A); df["City"]=tx(raw,C)
-df["Opening Bid"]=nu(raw,B); df["Assessed"]=nu(raw,AV); df["Acres"]=nu(raw,AC); df["Tax Year"]=tx(raw,TY); df["Type"]=tx(raw,PT)
+df["TMS"]=tx(raw,T); df["Item"]=tx(raw,I); df["Owner"]=tx(raw,O)
+# The 2026 tax-sale spreadsheet does not have a standalone address column; the
+# property description contains the situs/street text and acreage.
+df["Address"]=tx(raw,A) if A else tx(raw,DESC)
+df["Property Description"]=tx(raw,DESC) if DESC else df["Address"]
+df["City"]=tx(raw,C)
+df["Opening Bid"]=nu(raw,B); df["Assessed"]=nu(raw,AV)
+df["Acres"]=nu(raw,AC) if AC else df["Property Description"].map(extract_acres)
+df["Tax Year"]=tx(raw,TY); df["Type"]=tx(raw,PT)
 df=df[(df.TMS.str.strip()!="") | (df.Owner.str.strip()!="") | df["Opening Bid"].notna()].copy()
-df["TMS_KEY"]=df.TMS.map(nt)
+df["TMS_KEY"]=df.TMS.map(tms_key)
 df["Mobile"]=(df.Type+" "+df.Address).str.lower().str.contains(r"mobile|manufactured|mh\b",regex=True)
 
 with st.spinner("Matching tax-sale properties to Anderson County GIS parcels…"):
@@ -207,7 +240,7 @@ with st.spinner("Matching tax-sale properties to Anderson County GIS parcels…"
 pd_gis=pd.DataFrame(pars)
 if len(pd_gis):
     gis_tms_col=fc(pd_gis,[r"\btms\b",r"tax.?map",r"map.?number",r"parcel.?id"])
-    pd_gis["TMS_KEY"]=pd_gis[gis_tms_col].map(nt) if gis_tms_col else pd.Series("",index=pd_gis.index)
+    pd_gis["TMS_KEY"]=pd_gis[gis_tms_col].map(tms_key) if gis_tms_col else pd.Series("",index=pd_gis.index)
     for new,pats in [("GIS Address",[r"phys.?addr",r"situs",r"address",r"site.?addr"]),
                      ("GIS Market",[r"market.?value",r"mkt.?value",r"mrkt",r"fair.?market",r"\bmarket\b"]),
                      ("GIS Acres",[r"acres?",r"gis.?acres",r"lot.?size"]),
@@ -222,7 +255,7 @@ else:
 
 df["GIS Matched"]=df["_geom"].notna() | df["_lat"].notna() | df["GIS Address"].notna() | df["GIS Market"].notna()
 df["Research Address"]=df.Address.where(df.Address.str.strip().ne(""),df["GIS Address"].fillna(""))
-df["GIS Acres Final"]=pd.to_numeric(df["GIS Acres"],errors="coerce").fillna(df["Acres"])
+df["GIS Acres Final"]=pd.to_numeric(df["GIS Acres"],errors="coerce").fillna(pd.to_numeric(df["Acres"],errors="coerce"))
 df["Bid/Assessed"]=df["Opening Bid"]/df["Assessed"].replace(0,pd.NA)
 df["Bid/Market"]=df["Opening Bid"]/pd.to_numeric(df["GIS Market"],errors="coerce").replace(0,pd.NA)
 
@@ -230,7 +263,7 @@ with st.expander("🧪 Data diagnostics", expanded=False):
     st.write(f"Detected spreadsheet columns — TMS: `{T or 'NOT FOUND'}` · Owner: `{O or 'NOT FOUND'}` · Address: `{A or 'NOT FOUND'}` · Opening bid: `{B or 'NOT FOUND'}` · Value: `{AV or 'NOT FOUND'}` · Acres: `{AC or 'NOT FOUND'}`")
     st.write(f"Rows loaded: **{len(df):,}** · GIS parcel matches: **{int(df['GIS Matched'].sum()):,}**")
     st.write("County GIS parcel fields used: TMS, PHYS_ADDR, MRKT_VALUE, RATIO, CPLAT and parcel geometry.")
-    if not T or not B: st.warning("The spreadsheet header was not confidently recognized. Upload the current county XLSX to validate the detected fields.")
+    if not T or not B: st.warning("The county 2026 ad uses a compact tabular layout. The app now interprets TAXMAP and AMOUNT DUE / DUE 6% as the TMS and opening-bid fields, and extracts acreage from PROPERTY DESCRIPTION.")
     if len(df) and int(df["GIS Matched"].sum())==0: st.error("No GIS parcel matches were returned. The list can still be screened, but the map/value fields will not be reliable until the TMS match works.")
 
 with st.expander("🔎 Filters", expanded=True):
