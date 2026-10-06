@@ -81,7 +81,14 @@ def nu(df,c):
     s=df[c].astype(str).str.replace(r"[$,% ,]", "", regex=True).str.replace(r"\(([^)]+)\)", r"-\1", regex=True)
     return pd.to_numeric(s, errors="coerce")
 
-def nt(x): return re.sub(r"[^0-9]", "", str(x))
+def nt(x):
+    # Excel often turns a 9- or 10-digit TMS into a float such as 450001008.0.
+    # Remove only a trailing Excel decimal before extracting digits so we do not
+    # accidentally turn the TMS into a different parcel number.
+    s=str(x).strip()
+    if re.fullmatch(r"\d+\.0+", s):
+        s=s.split(".",1)[0]
+    return re.sub(r"[^0-9]", "", s)
 
 def tms_key(x):
     digits=nt(x)
@@ -101,6 +108,8 @@ def tms_variants(x):
     if len(canonical)==10:
         hy=f"{canonical[:3]}-{canonical[3:5]}-{canonical[5:7]}-{canonical[7:]}"
         if hy not in vals: vals.append(hy)
+        # Also include the unhyphenated canonical value explicitly.
+        if canonical not in vals: vals.append(canonical)
     return vals
 
 def extract_acres(description):
