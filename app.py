@@ -79,75 +79,43 @@ def normalized_key(x):
     c=canonical_tms(x)
     return digits(c) if c else digits(x)
 
-def browser_map(rows, title='🗺️ County GIS parcel map'):
-    """Render the county GIS entirely in the user's browser.
-    This intentionally avoids server-side requests to the county GIS host, because
-    Streamlit Cloud cannot reliably reach that host in this deployment.
-    """
+def google_map(rows, api_key):
+    """Fast Google Maps view using county SSAP point coordinates."""
     payload=[]
     for idx,row in rows.iterrows():
         tms=str(row.get('TMS_CANONICAL') or '').strip()
         if not tms: continue
         payload.append({
-            'idx':int(idx), 'tms':tms, 'key':normalized_key(tms), 'owner':str(row.get('Owner') or ''),
+            'idx':int(idx), 'tms':tms, 'key':normalized_key(tms),
+            'owner':str(row.get('Owner') or ''),
             'address':str(row.get('Research Address') or row.get('Address') or ''),
             'bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
             'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
         })
-    # Prevent a </script> sequence from ever escaping into the page.
-    data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
-    gis_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
+    data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\/')
+    ssap_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/0/query'
     viewer_url='https://propertyviewer.andersoncountysc.org/'
-    html_doc="""<!doctype html><html><head>
+    if not api_key:
+        st.warning('Google Maps demo key needed for the embedded map. Get a free Maps Demo Key from Google, then paste it above.')
+        return
+    html_doc = r'''<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
-<style>
-html,body,#map{{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}}
-#map{{min-height:620px;background:#eef2f5}}
-#status{{position:absolute;z-index:1000;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:82%}}
-#legend{{position:absolute;z-index:1000;right:12px;bottom:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:12px}}
-.good{{color:#087f23}} .bad{{color:#a40000}}
-</style></head><body>
-<div id="map"></div><div id="status">Loading county GIS…</div><div id="legend">🟢 Tax-sale parcel &nbsp; | &nbsp; Draw a rectangle/polygon to filter visible parcels</div>
-<script>window.TAXSALE={data:__DATA__,gis:__GIS__,viewer:__VIEWER__};</script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<style>html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}#map{min-height:620px;background:#eef2f5}#status{position:absolute;z-index:5;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:84%}.good{color:#087f23}.bad{color:#a40000}</style></head><body>
+<div id="map"></div><div id="status">Starting Google Maps...</div>
+<script>window.TAXSALE={data:__DATA__,ssap:__SSAP__,viewer:__VIEWER__};</script>
 <script>
-const S=window.TAXSALE, map=L.map('map').setView([34.5034,-82.6501],10);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'© OpenStreetMap contributors'}}).addTo(map);
-const group=L.featureGroup().addTo(map), drawn=new L.FeatureGroup().addTo(map); 
-const taxByTms=new Map(S.data.map(x=>[x.key,x]));
-let features=[];
-const status=document.getElementById('status');
-function normalizedKey(x){{return String(x??'').replace(/[^0-9]/g,'');}}
-function esc(x){{return String(x??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));}}
-function popup(p){{const x=taxByTms.get(normalizedKey(p.TMS))||{{}};return `<b>${{esc(p.TMS)}}</b><br>${{esc(p.TAXOWNSTR||x.owner||'')}}<br>${{esc(p.PHYS_ADDR||x.address||'')}}<br>Opening bid: ${{x.bid==null?'—':x.bid.toLocaleString()}}<br>GIS market: ${{p.MRKT_VALUE==null?'—':Number(p.MRKT_VALUE).toLocaleString()}}`;}}
-function addArcFeature(f){{const a=f.attributes||{{}},g=f.geometry||{{}},props=a; const gj={{type:'Feature',properties:props,geometry:{{type:'Polygon',coordinates:g.rings||[]}}}}; const layer=L.geoJSON(gj,{{style:{{color:'#00a83b',weight:2,fillOpacity:.24}},onEachFeature:(ff,l)=>l.bindPopup(popup(ff.properties||{{}}))}});layer.addTo(group);return layer;}}
-function jsonp(url,timeout=12000){{return new Promise((resolve,reject)=>{{const cb='gis_cb_'+Date.now()+'_'+Math.floor(Math.random()*1000000); const script=document.createElement('script'); let done=false; const timer=setTimeout(()=>{{if(done)return;done=true;cleanup();reject(new Error('GIS request timed out (12 seconds).'))}},timeout); function cleanup(){{clearTimeout(timer);delete window[cb];script.remove();}} window[cb]=(data)=>{{if(done)return;done=true;cleanup(); if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.')); else resolve(data);}}; script.onerror=()=>{{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'))}}; script.src=url+(url.includes('?')?'&':'?')+'callback='+cb; document.head.appendChild(script);}});}}
-async function queryBatch(batch){{
- const where='TMS IN ('+batch.map(x=>`'${{x.key.replaceAll("'","''")}}'`).join(',')+')';
- const u=S.gis+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,PHYS_ADDR,MRKT_VALUE,CPLAT,RATIO,TAXOWNSTR')+'&returnGeometry=true&outSR=4326&f=json';
- const j=await jsonp(u); return j.features||[];
-}}
-async function loadGIS(){{
- const batches=[]; for(let i=0;i<S.data.length;i+=75)batches.push(S.data.slice(i,i+20));
- let matched=0; status.innerHTML=`Loading county GIS… <b>0</b> of <b>${{S.data.length}}</b>`;
- for(let i=0;i<batches.length;i++){{
-   try{{const fs=await queryBatch(batches[i]); fs.forEach(f=>{{features.push(f);addArcFeature(f);}});matched+=fs.length;status.innerHTML=`County GIS: <span class="good"><b>${{matched}}</b> of ${{S.data.length}} tax-sale parcels matched</span>`;}}
-   catch(e){{status.innerHTML=`<span class="bad"><b>Browser GIS connection failed.</b></span><br>${{esc(e.message)}}<br><a href="${{S.viewer}}" target="_blank">Open Anderson County Property Viewer</a>`; return;}}
- }}
- if(group.getLayers().length) map.fitBounds(group.getBounds().pad(.08));
- else status.innerHTML=`<span class="bad"><b>0 parcels matched.</b></span><br>Check the TMS values or open the county viewer.`;
-}}
-const dc=new L.Control.Draw({{draw:{{polyline:false,circle:false,circlemarker:false,marker:false},polygon:{{allowIntersection:false,showArea:true}},rectangle:true}},edit:{{featureGroup:drawn}}}});
-map.addControl(dc);
-map.on(L.Draw.Event.CREATED,e=>{{drawn.clearLayers();drawn.addLayer(e.layer);let n=0;group.eachLayer(l=>{{try{{if(e.layer.getBounds().intersects(l.getBounds()))n++;}}catch(_){{}}}});status.innerHTML=`GIS loaded: ${{group.getLayers().length}} parcels. <b>${{n}}</b> parcel(s) intersect your drawn area.`;}});
-map.on('moveend',()=>{{if(group.getLayers().length){{const b=map.getBounds();let n=0;group.eachLayer(l=>{{try{{if(b.intersects(l.getBounds()))n++;}}catch(_){{}}}});status.innerHTML=`GIS loaded: <b>${{group.getLayers().length}}</b> matched. <b>${{n}}</b> are in the visible map area.`;}}}});
-loadGIS();
-</script></body></html>"""
-    html_doc=html_doc.replace("{{","{").replace("}}","}")
-    html_doc=html_doc.replace("__DATA__",data_json).replace("__GIS__",json.dumps(gis_url)).replace("__VIEWER__",json.dumps(viewer_url))
+const S=window.TAXSALE; let map,info,markers=[]; const byKey=new Map(S.data.map(x=>[x.key,x]));
+function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function key(x){return String(x??'').replace(/[^0-9]/g,'');}
+function popup(x,p){return `<div style="min-width:220px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||p.OWNER||'')}</b><br>${esc(x.address||p.FullAddress||'')}<hr style="border:0;border-top:1px solid #ddd"><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((x.address||'')+', Anderson County, SC')}">Open in Google Maps</a><br><a target="_blank" href="https://www.google.com/maps/@?api=1&map_action=pano&query=${encodeURIComponent((x.address||'')+', Anderson County, SC')}">Street View</a></div>`;}
+function jsonp(url,timeout=12000){return new Promise((resolve,reject)=>{const cb='ssap_cb_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County coordinate request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
+async function getCoords(batch){const vals=batch.map(x=>`'${x.key.replaceAll("'","''")}'`).join(',');const fields='TMS,TMS_PAD,Long,Lat,FullAddress,OWNER';const u=S.ssap+'?where='+encodeURIComponent(`TMS_PAD IN (${vals})`)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=false&f=json';let j=await jsonp(u);if(!(j.features||[]).length){const u2=S.ssap+'?where='+encodeURIComponent(`TMS IN (${vals})`)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=false&f=json';j=await jsonp(u2);}return j.features||[];}
+function initMap(){map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});info=new google.maps.InfoWindow();loadPoints();}
+async function loadPoints(){const batches=[];for(let i=0;i<S.data.length;i+=200)batches.push(S.data.slice(i,i+200));let matched=0;document.getElementById('status').innerHTML=`Google Maps ready. Finding county coordinates... <b>0</b> of <b>${S.data.length}</b>`;const bounds=new google.maps.LatLngBounds();for(const batch of batches){try{const fs=await getCoords(batch);for(const f of fs){const p=f.attributes||{};const x=byKey.get(key(p.TMS_PAD||p.TMS));if(!x||p.Lat==null||p.Long==null)continue;const pos={lat:Number(p.Lat),lng:Number(p.Long)};const m=new google.maps.Marker({map,position:pos,title:`${x.tms} • ${x.owner}`});m.addListener('click',()=>{info.setContent(popup(x,p));info.open({map,anchor:m});});markers.push(m);bounds.extend(pos);matched++;}document.getElementById('status').innerHTML=`Google Maps: <span class="good"><b>${matched}</b> of <b>${S.data.length}</b> tax-sale parcels located</span>`;}catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County coordinate lookup failed.</b></span><br>${esc(e.message)}<br><a href="${S.viewer}" target="_blank">Open Anderson County Property Viewer</a>`;return;}}if(matched){map.fitBounds(bounds);if(map.getZoom()>15)map.setZoom(15);}else document.getElementById('status').innerHTML='<span class="bad"><b>No tax-sale coordinates were found.</b></span>';}
+</script>
+<script async src="https://maps.googleapis.com/maps/api/js?key=__KEY__&loading=async&callback=initMap"></script>
+</body></html>'''
+    html_doc=html_doc.replace('__DATA__',data_json).replace('__SSAP__',json.dumps(ssap_url)).replace('__VIEWER__',json.dumps(viewer_url)).replace('__KEY__',html.escape(str(api_key),quote=True))
     components.html(html_doc,height=650,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
@@ -198,7 +166,7 @@ df['TMS_KEY']=df.TMS_CANONICAL.map(normalized_key)
 # Prefer an explicit acreage printed in the property description.
 # This preserves leading decimals such as '.73 AC' as 0.73 rather than 73.
 extracted=df['Address'].astype(str).str.extract(
-    r'(?<![0-9])((?:0?\.[0-9]+|[0-9]+(?:\.[0-9]+)?))\s*(?:A|AC|ACRES)\b',
+    r'(?<![0-9])((?:0?\.[0-9]+|[0-9]+(?:\.[0-9]+)?))\s+(?:A|AC|ACRES)\b',
     flags=re.I, expand=False
 )
 explicit_acres=pd.to_numeric(extracted,errors='coerce')
@@ -264,9 +232,13 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
-st.subheader('🗺️ Anderson County parcel map')
-st.caption('The map below contacts the county GIS directly from your phone/browser. Use the draw tools to inspect a rectangle or polygon.')
-if len(r): browser_map(r.head(1562))
+st.subheader('🗺️ Google Maps property map')
+st.caption('Google renders the map; Anderson County GIS is used only to obtain lightweight GPS points. This avoids loading 1,500 parcel polygons.')
+with st.expander('🔑 Google Maps demo key',expanded=True):
+    st.write("For this prototype, use Google's no-cost Maps Demo Key. It is intended for testing/prototyping, not production.")
+    st.markdown('[Get a Google Maps Demo Key](https://developers.google.com/maps/documentation/javascript/get-api-key)')
+    google_maps_key=st.text_input('Paste your Google Maps Demo Key',type='password',placeholder='AIza…',help='Used only in this current Streamlit session.')
+if len(r): google_map(r.head(1562),google_maps_key)
 
 st.subheader('🏆 Top opportunities')
 if len(r)==0: st.warning('No properties match the current filters.')
@@ -355,5 +327,5 @@ if len(r):
         st.info(f"${rb['Estimated Value']:,.0f} estimated value − ${repair_budget:,.0f} repairs − ${holding_cost:,.0f} holding − risk reserve − transaction reserve − ${target_margin:,.0f} desired margin = **${rb['Maximum Bid']:,.0f} max bid**.")
 
 out=r.copy(); out['Favorite']=False; out['Notes']=''
-st.download_button('📥 Download ranked shortlist CSV',out.to_csv(index=False).encode('utf-8-sig'),'anderson_2026_ranked_shortlist_v8.csv','text/csv',use_container_width=True)
+st.download_button('📥 Download ranked shortlist CSV',out.to_csv(index=False).encode('utf-8-sig'),'anderson_2026_ranked_shortlist_v9.csv','text/csv',use_container_width=True)
 st.caption('Screening signals must be independently verified before bidding. Tax-sale properties are sold as-is/where-is.')
