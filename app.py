@@ -11,6 +11,7 @@ ACPASS='https://acpass.andersoncountysc.org/'
 GIS='https://propertyviewer.andersoncountysc.org/arcgis/rest/services'
 PARCEL_PRIMARY=f'{GIS}/Opengov/MAT/MapServer/13/query'
 PARCEL_FALLBACK=f'{GIS}/NewPropertyViewer/MapServer/5/query'
+PARCEL_CLASS=f'{GIS}/CartegraphOMS/Parcels/MapServer/0/query'
 ZONING=f'{GIS}/QueryMap/MapServer/9/query'
 FLOOD=f'{GIS}/QueryMap/MapServer/18/query'
 SALES=f'{GIS}/Parcel_Sales/MapServer/0/query'
@@ -25,7 +26,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.0')
+st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.1')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -153,9 +154,12 @@ def google_map(rows, api_key):
             'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
             'mobile':bool(row.get('Mobile')),
             'house':bool(re.search(r'\b(HOUSE|RESIDENCE|DWELLING|HOME|SINGLE FAMILY|RANCH|BRICK|FRAME)\b', str(row.get('Address') or '').upper())),
+            'web_house':bool(row.get('Web House Evidence',False)),
+            'web_mobile':bool(row.get('Web Mobile Evidence',False)),
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
     parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
+    class_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/CartegraphOMS/Parcels/MapServer/0/query'
     html_doc = '''<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -171,7 +175,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 <div id="map"></div><div id="status">Loading county parcel locations...</div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land / other</option><option value="house">House indicated</option><option value="mobile">Mobile home</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land / other</div><div><span class="dot house"></span>House indicated</div><div><span class="dot mobile"></span>Mobile home</div></div>
-<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,googleKey:__KEY__};</script>
+<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,classParcel:__CLASS__,googleKey:__KEY__};</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
 const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[];
@@ -186,11 +190,18 @@ function houseClue(x){return !!x.house || /\b(HOUSE|RESIDENCE|DWELLING|HOME|SING
 function mobileClue(x){return !!x.mobile || /\b(MOBILE|MANUFACTURED|MOBILE HOME)\b/.test(String(x.address||'').toUpperCase());}
 function improved(p){return String(p.IMPRV??'').trim()!=='';}
 function statusLabel(p){return improved(p)?'County-improved (IMPRV '+esc(p.IMPRV)+')':'No county improvement indicator';}
-function category(x,p){if(mobileClue(x))return 'mobile'; if(houseClue(x))return 'house'; return 'land';}
+function category(x,p){if(mobileClue(x)||x.web_mobile)return 'mobile'; if(x.web_house||houseClue(x)||String(p.CLASS||'').trim().toUpperCase()==='R')return 'house'; return 'land';}
 function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':'#2e7d32');}
-function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House indicated':'Land / other'); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House indicated':'Land / other'); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>House verification:</b> ${x.web_house?'External web evidence found':(String(p.CLASS||'').toUpperCase()==='R'?'County residential/homestead class':'Not verified')}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
+async function queryClassBatch(keys){
+  const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
+  if(!safe.length)return [];
+  const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
+  const u=S.classParcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,CLASS,IMPRV,RATIO')+'&returnGeometry=false&f=json';
+  const j=await jsonp(u); return j.features||[];
+}
 async function queryParcelBatch(keys){
   const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
   if(!safe.length)return [];
@@ -211,8 +222,11 @@ async function locate(){
     document.getElementById('status').innerHTML=`Loading county parcel locations… <b>${i+1}</b> of <b>${batches.length}</b>`;
     try{const fs=await queryParcelBatch(batches[i]); all.push(...fs);}catch(e){console.warn(e);}
   }
+  let classFeatures=[];
+  try{for(const b of batches){const fs=await queryClassBatch(b);classFeatures.push(...fs);}}catch(e){console.warn('CLASS lookup',e);}
+  const classByKey=new Map(classFeatures.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
   const out=[]; const seen=new Set();
-  for(const f of all){const p=f.attributes||{}; const k=key(p.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k); out.push({x,p,c});}
+  for(const f of all){const p=Object.assign({},f.attributes||{},classByKey.get(key((f.attributes||{}).TMS))||{}); const k=key(p.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k); out.push({x,p,c});}
   return out;
 }
 function makeLeaflet(){
@@ -254,7 +268,7 @@ function loadGoogleThenStart(){
 }
 loadGoogleThenStart();
 </script></body></html>'''
-    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__KEY__',json.dumps(str(api_key or '')))
+    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__CLASS__',json.dumps(class_url)).replace('__KEY__',json.dumps(str(api_key or '')))
     components.html(html_doc,height=680,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
@@ -338,7 +352,7 @@ with st.expander('🔎 Filters',expanded=True):
     ma=c3.number_input('Minimum acres',0.,10000.,0.,.1)
     mx=c4.number_input('Maximum acres',0.,10000.,10000.,.1)
     c5,c6=st.columns(2)
-    c5.info('The map uses Anderson County GPS points and its parcel IMPRV indicator. Orange points have a county improvement value; green points have none. IMPRV is not by itself proof of a house.')
+    c5.info('House colors now use a stronger county residential/homestead signal (CLASS=R) plus explicit house/mobile clues. The county says IMPRV can mean a house, barn, garage, fence, etc., so IMPRV alone is not treated as a house.')
     minval=0
 
     st.markdown('**Property type — turn categories on/off**')
