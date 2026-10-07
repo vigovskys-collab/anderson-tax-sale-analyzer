@@ -1,8 +1,9 @@
-# Anderson County SC Tax Sale Analyzer v9.8
+# Anderson County SC Tax Sale Analyzer v9.9.1
 
-Updates from v9.7:
-- Street View links in map popups now use the actual county parcel latitude/longitude (`viewpoint=lat,lng`) instead of an address-only search, preventing random Street View locations.
-- Map popups prefer the county `PHYS_ADDR` when available.
-- Added Zillow and Realtor.com cross-check links to map popups and property cards using a targeted web search for the physical address.
-- Preserves official Anderson County parcel links and land/improved/house-clue color categories.
-- External real-estate sites are cross-checks only; absence of a listing is not proof that a property has no house.
+This build fixes two problems from v9.9:
+
+- Map marker colors now actually use the property-type classification: green = Land / other, red = House indicated, blue = Mobile home.
+- The map property-type dropdown now filters those same three categories.
+- Zillow and Realtor.com buttons now send a correctly formed Google site-search for the exact property address instead of the broken `+a+` query.
+
+The external listing searches are research aids only. A missing Zillow/Realtor result does not prove that a property has no house.
