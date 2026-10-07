@@ -1,5 +1,7 @@
-# Anderson County Tax Sale Analyzer v9.6
+# Anderson County SC Tax Sale Analyzer v9.7
 
-Fixes the v9.5 map failure caused by the JavaScript code trying to update a missing `#links` element. The map now renders markers before the optional links panel is updated, so a panel error cannot prevent points from appearing.
-
-Keeps the v9.5 land/house/improvement color scheme and filters, direct County GIS links, Google Maps, and Street View.
+- Queries the official Anderson County parcel layer directly by TMS in small batches.
+- Uses parcel geometry for actual map locations and returns county IMPRV/market-value fields.
+- Uses Google Maps when a valid key is supplied; otherwise automatically falls back to a key-free Leaflet/OpenStreetMap interactive map.
+- Keeps Google Maps, Street View, and direct Anderson County parcel links.
+- Keeps land/house-clue/county-improved colors and map filtering.

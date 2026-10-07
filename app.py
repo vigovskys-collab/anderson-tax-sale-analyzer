@@ -25,7 +25,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v9.6')
+st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v9.7')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -84,7 +84,9 @@ def county_viewer_url(tms):
     return f'https://propertyviewer.andersoncountysc.org/mapsjs/?TMS={quote_plus(key)}&disclaimer=false' if key else 'https://propertyviewer.andersoncountysc.org/mapsjs/?disclaimer=false'
 
 def google_map(rows, api_key):
-
+    """Interactive parcel map using direct TMS parcel queries.
+    Falls back to key-free Leaflet/OpenStreetMap if Google Maps is not authenticated.
+    """
     payload=[]
     for idx,row in rows.iterrows():
         tms=str(row.get('TMS_CANONICAL') or '').strip()
@@ -97,37 +99,103 @@ def google_map(rows, api_key):
             'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
-    ssap_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/0/query'
-    viewer_url='https://propertyviewer.andersoncountysc.org/'
-    if not api_key:
-        st.warning('Enter a Google Maps demo key to display the interactive property points. The county and Google Maps links below still work without it.')
-        return
-    html_doc = r'''<!doctype html><html><head>
+    parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
+    html_doc = '''<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}#map{min-height:620px;background:#eef2f5}.prop{padding:10px 4px;border-top:1px solid #ddd}.prop a{font-weight:600}#links{padding:12px;background:#fff;max-height:500px;overflow:auto}#status{position:absolute;z-index:5;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:84%}.good{color:#087f23}.bad{color:#a40000}.legend{position:absolute;z-index:5;right:12px;top:12px;background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}.land{background:#2e7d32}.house{background:#c62828}.improved{background:#ef6c00}.unknown{background:#757575}</style></head><body>
-<div id="map"></div><div id="status">Loading county parcel points...</div><div style="position:absolute;z-index:5;left:12px;bottom:12px;background:white;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land only</option><option value="improved">County-improved</option><option value="house">House clue</option></select></div><div class="legend"><div><span class="dot land"></span>Land only</div><div><span class="dot house"></span>House clue</div><div><span class="dot improved"></span>County-improved</div></div><div id="links" style="display:none"></div>
-<script>window.TAXSALE={data:__DATA__,ssap:__SSAP__,viewer:__VIEWER__};</script>
+<style>
+html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}
+#map{min-height:620px;background:#eef2f5}.good{color:#087f23}.bad{color:#a40000}
+#status{position:absolute;z-index:500;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:84%}
+.legend{position:absolute;z-index:500;right:12px;top:12px;background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}.land{background:#2e7d32}.house{background:#c62828}.improved{background:#ef6c00}
+#filterBox{position:absolute;z-index:500;left:12px;bottom:12px;background:white;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
+</style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+</head><body>
+<div id="map"></div><div id="status">Loading county parcel locations...</div>
+<div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land only</option><option value="improved">County-improved</option><option value="house">House clue</option></select></div>
+<div class="legend"><div><span class="dot land"></span>Land only</div><div><span class="dot house"></span>House clue</div><div><span class="dot improved"></span>County-improved</div></div>
+<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,googleKey:__KEY__};</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const S=window.TAXSALE; let map,info,markers=[],locatedPoints=[]; const byKey=new Map(S.data.map(x=>[x.key,x]));
+const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[];
+const byKey=new Map(S.data.map(x=>[key(x.key),x]));
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function key(x){return String(x??'').replace(/[^0-9]/g,'');}
 function countyUrl(tms){return 'https://propertyviewer.andersoncountysc.org/mapsjs/?TMS='+encodeURIComponent(key(tms))+'&disclaimer=false';}
-function googleUrl(x,p){return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((x.address||'')+', Anderson County, SC');}
-function streetUrl(x,p){return 'https://www.google.com/maps/@?api=1&map_action=pano&query='+encodeURIComponent((x.address||'')+', Anderson County, SC');}
-function improvementLabel(p){const v=String(p.IMPRV??'').trim(); return v ? 'County-improved (IMPRV '+esc(v)+')' : 'Land only / no IMPRV';}
-function popup(x,p){return `<div style="min-width:240px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(x.address||'')}<hr style="border:0;border-top:1px solid #ddd"><b>County status:</b> ${improvementLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(x,p)}">🗺️ Google Maps</a><br><a target="_blank" href="${streetUrl(x,p)}">📍 Street View</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
-function jsonp(url,timeout=25000){return new Promise((resolve,reject)=>{const cb='ssap_cb_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County coordinate request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
-async function getAllCountyPoints(){const fields='TMS,TMS_PAD,TMS_PZ,Long,Lat,IMPRV';const u=S.ssap+'?where=1%3D1&outFields='+encodeURIComponent(fields)+'&returnGeometry=false&resultRecordCount=2000&f=json';const j=await jsonp(u);return j.features||[];}
-function addMarker(x,p){if(p.Lat==null||p.Long==null)return false;const pos={lat:Number(p.Lat),lng:Number(p.Long)};if(!map)return true;const improved=String(p.IMPRV??'').trim()!=='';const house=/\b(HOUSE|RESIDENCE|DWELLING|HOME)\b/.test(String(x.address||'').toUpperCase());const m=new google.maps.Marker({map,position:pos,title:`${x.tms} • ${house?'House clue':(improved?'County improved':'Land only')}`,icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:house?'#c62828':(improved?'#ef6c00':'#2e7d32'),fillOpacity:0.95,strokeColor:'#fff',strokeWeight:1}});m.addListener('click',()=>{info.setContent(popup(x,p));info.open({map,anchor:m});});markers.push(m);return true;}
-function matchFeatures(features){const out=[];const seen=new Set();for(const f of features){const p=f.attributes||{};const x=byKey.get(key(p.TMS_PAD))||byKey.get(key(p.TMS_PZ))||byKey.get(key(p.TMS));if(!x||p.Lat==null||p.Long==null||seen.has(x.key))continue;seen.add(x.key);out.push({x,p});}return out;}
-function showLinks(located){const panel=document.getElementById('links');panel.innerHTML='<b>Located tax-sale parcels</b><div style="font-size:13px;color:#666;margin:5px 0 10px">Green = no county IMPRV value. Orange = county IMPRV value. IMPRV is an improvement indicator; it is not by itself proof that the improvement is a house.</div>'+located.slice(0,100).map(({x,p})=>`<div class="prop"><b>${esc(x.tms)}</b> — ${esc(x.owner)}<br>${esc(x.address||'')}<br><b>${improvementLabel(p)}</b><br><a target="_blank" href="${googleUrl(x,p)}">🗺️ Google Maps</a> &nbsp; <a target="_blank" href="${streetUrl(x,p)}">📍 Street View</a> &nbsp; <a target="_blank" href="${countyUrl(x.tms)}">🏛️ County</a></div>`).join('');}
-async function start(){try{const features=await getAllCountyPoints();locatedPoints=matchFeatures(features);renderMarkers();showLinks(locatedPoints);const improved=locatedPoints.filter(q=>String(q.p.IMPRV??'').trim()!=='').length;document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${improved}</b> with county IMPRV`;}catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County coordinate lookup failed.</b></span><br>${esc(e.message)}<br><a href="${S.viewer}" target="_blank">Open Anderson County Property Viewer</a>`;}}
-function renderMarkers(){if(!map||!locatedPoints.length)return;markers.forEach(m=>m.setMap(null));markers=[];const bounds=new google.maps.LatLngBounds();const mode=document.getElementById('improvementFilter')?.value||'all';locatedPoints.forEach(({x,p})=>{const improved=String(p.IMPRV??'').trim()!=='';const desc=String(x.address||'').toUpperCase();const house=/\b(HOUSE|RESIDENCE|DWELLING|HOME)\b/.test(desc);if(mode==='land'&&improved)return;if(mode==='improved'&&!improved)return;if(mode==='house'&&!house)return;if(addMarker(x,p))bounds.extend({lat:Number(p.Lat),lng:Number(p.Long)});});if(!bounds.isEmpty()){map.fitBounds(bounds);if(map.getZoom()>14)map.setZoom(14);}}
-function initMap(){map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});info=new google.maps.InfoWindow();document.getElementById('improvementFilter').addEventListener('change',renderMarkers);start();}
-window.gm_authFailure=function(){document.getElementById('status').innerHTML='<span class="bad"><b>Google Maps could not authenticate this key.</b></span>';};
-</script><script async src="https://maps.googleapis.com/maps/api/js?key=__KEY__&loading=async&callback=initMap"></script>
-</body></html>'''
-    html_doc=html_doc.replace('__DATA__',data_json).replace('__SSAP__',json.dumps(ssap_url)).replace('__VIEWER__',json.dumps(viewer_url)).replace('__KEY__',html.escape(str(api_key),quote=True))
+function googleUrl(x){return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((x.address||'')+', Anderson County, SC');}
+function streetUrl(x){return 'https://www.google.com/maps/@?api=1&map_action=pano&query='+encodeURIComponent((x.address||'')+', Anderson County, SC');}
+function houseClue(x){return /\b(HOUSE|RESIDENCE|DWELLING|HOME)\b/.test(String(x.address||'').toUpperCase());}
+function improved(p){return String(p.IMPRV??'').trim()!=='';}
+function statusLabel(p){return improved(p)?'County-improved (IMPRV '+esc(p.IMPRV)+')':'Land only / no IMPRV';}
+function colorFor(x,p){return houseClue(x)?'#c62828':(improved(p)?'#ef6c00':'#2e7d32');}
+function popup(x,p){return `<div style="min-width:240px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(x.address||'')}<hr style="border:0;border-top:1px solid #ddd"><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(x)}">🗺️ Google Maps</a><br><a target="_blank" href="${streetUrl(x)}">📍 Street View</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
+function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
+async function queryParcelBatch(keys){
+  const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
+  if(!safe.length)return [];
+  const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
+  const u=S.parcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,IMPRV,MRKT_VALUE,PHYS_ADDR,RATIO,CPLAT')+'&returnGeometry=true&outSR=4326&geometryPrecision=6&maxAllowableOffset=0.0002&f=json';
+  const j=await jsonp(u); return j.features||[];
+}
+function centroid(geom){
+  if(!geom)return null;
+  const rings=geom.rings||[]; if(!rings.length)return null;
+  let sx=0,sy=0,n=0;
+  for(const ring of rings){for(const pt of ring){if(Array.isArray(pt)&&pt.length>=2){sx+=Number(pt[0]);sy+=Number(pt[1]);n++;}}}
+  return n?{lat:sy/n,lng:sx/n}:null;
+}
+async function locate(){
+  const all=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,20);
+  for(let i=0;i<batches.length;i++){
+    document.getElementById('status').innerHTML=`Loading county parcel locations… <b>${i+1}</b> of <b>${batches.length}</b>`;
+    try{const fs=await queryParcelBatch(batches[i]); all.push(...fs);}catch(e){console.warn(e);}
+  }
+  const out=[]; const seen=new Set();
+  for(const f of all){const p=f.attributes||{}; const k=key(p.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k); out.push({x,p,c});}
+  return out;
+}
+function makeLeaflet(){
+  map=L.map('map',{zoomControl:true,scrollWheelZoom:true}).setView([34.5034,-82.6501],10);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+}
+function makeGoogle(){
+  if(!S.googleKey)return false;
+  try{map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});info=new google.maps.InfoWindow();googleMode=true;return true;}catch(e){return false;}
+}
+function clearMarkers(){markers.forEach(m=>googleMode?m.setMap(null):m.remove());markers=[];}
+function addMarker(x,p,c){
+  const col=colorFor(x,p);
+  if(googleMode){const m=new google.maps.Marker({map,position:{lat:c.lat,lng:c.lng},title:`${x.tms} • ${houseClue(x)?'House clue':(improved(p)?'County improved':'Land only')}`,icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:col,fillOpacity:.95,strokeColor:'#fff',strokeWeight:1}});m.addListener('click',()=>{info.setContent(popup(x,p));info.open({map,anchor:m});});markers.push(m);}
+  else {const m=L.circleMarker([c.lat,c.lng],{radius:7,weight:1,color:'#fff',fillColor:col,fillOpacity:.95}).bindPopup(popup(x,p));m.addTo(map);markers.push(m);}
+}
+function renderMarkers(){
+  if(!map||!locatedPoints.length)return; clearMarkers(); const mode=document.getElementById('improvementFilter').value; const visible=[];
+  locatedPoints.forEach(q=>{const imp=improved(q.p),house=houseClue(q.x);if(mode==='land'&&imp)return;if(mode==='improved'&&!imp)return;if(mode==='house'&&!house)return;addMarker(q.x,q.p,q.c);visible.push(q);});
+  if(!visible.length)return;
+  if(googleMode){const b=new google.maps.LatLngBounds();visible.forEach(q=>b.extend({lat:q.c.lat,lng:q.c.lng}));map.fitBounds(b);if(map.getZoom()>14)map.setZoom(14);}
+  else {const b=L.latLngBounds(visible.map(q=>[q.c.lat,q.c.lng]));map.fitBounds(b.pad(.12));}
+}
+async function start(){
+  try{
+    locatedPoints=await locate();
+    const ok=makeGoogle();
+    if(!ok){makeLeaflet();document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> Using a key-free map because Google Maps is not authenticated. Google Maps links remain available on every point.';}
+    else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
+    document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();
+    const imp=locatedPoints.filter(q=>improved(q.p)).length;
+    setTimeout(()=>{document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${imp}</b> county-improved`;},500);
+  }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
+}
+function loadGoogleThenStart(){
+  if(!S.googleKey){start();return;}
+  window.gm_authFailure=function(){start();};
+  const s=document.createElement('script');s.async=true;s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(S.googleKey);s.onload=()=>start();s.onerror=()=>start();document.head.appendChild(s);
+}
+loadGoogleThenStart();
+</script></body></html>'''
+    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__KEY__',json.dumps(str(api_key or '')))
     components.html(html_doc,height=680,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
