@@ -25,7 +25,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • browser GIS parcel research • no server-side county GIS dependency')
+st.caption('2026 tax-sale screening • Google Maps demo • browser GIS parcel research • v9.3')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
