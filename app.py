@@ -25,7 +25,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps demo • browser GIS parcel research • v9.3')
+st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v9.4')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -79,52 +79,45 @@ def normalized_key(x):
     c=canonical_tms(x)
     return digits(c) if c else digits(x)
 
+def county_viewer_url(tms):
+    key=normalized_key(tms)
+    return f'https://propertyviewer.andersoncountysc.org/mapsjs/?TMS={quote_plus(key)}&disclaimer=false' if key else 'https://propertyviewer.andersoncountysc.org/mapsjs/?disclaimer=false'
+
 def google_map(rows, api_key):
-    """Fast Google Maps view using county SSAP point coordinates."""
+    """Optional regional Google Maps view. Exact parcel research is handled by direct Anderson County viewer URLs."""
     payload=[]
     for idx,row in rows.iterrows():
         tms=str(row.get('TMS_CANONICAL') or '').strip()
         if not tms: continue
         payload.append({
-            'idx':int(idx), 'tms':tms, 'key':normalized_key(tms),
-            'owner':str(row.get('Owner') or ''),
-            'address':str(row.get('Research Address') or row.get('Address') or ''),
-            'bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
-            'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
+            'idx':int(idx), 'tms':tms, 'owner':str(row.get('Owner') or ''),
+            'address':str(row.get('Research Address') or row.get('Address') or '')
         })
-    data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\/')
-    ssap_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/0/query'
-    viewer_url='https://propertyviewer.andersoncountysc.org/'
     if not api_key:
-        st.warning('Google Maps demo key needed for the embedded map. Get a free Maps Demo Key from Google, then paste it above.')
+        st.info('The embedded Google map is optional. The exact county parcel links below work without a Google Maps key.')
         return
+    data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\/')
     html_doc = r'''<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}#map{min-height:620px;background:#eef2f5}.hint{font-size:13px;color:#666;margin:5px 0 10px}.prop{padding:10px 4px;border-top:1px solid #ddd}.prop a{font-weight:600}#links{padding:12px;background:#fff;max-height:500px;overflow:auto}#status{position:absolute;z-index:5;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:84%}.good{color:#087f23}.bad{color:#a40000}</style></head><body>
-<div id="map"></div><div id="status">Finding county coordinates...</div><div id="links"></div>
-<script>window.TAXSALE={data:__DATA__,ssap:__SSAP__,viewer:__VIEWER__};</script>
+<style>html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}#map{min-height:520px;background:#eef2f5}</style></head><body>
+<div id="map"></div>
+<script>window.TAXSALE={data:__DATA__};</script>
 <script>
-const S=window.TAXSALE; let map,info,markers=[],locatedPoints=[]; const byKey=new Map(S.data.map(x=>[x.key,x]));
-function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function key(x){return String(x??'').replace(/[^0-9]/g,'');}
-function popup(x,p){return `<div style="min-width:220px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||p.OWNER||'')}</b><br>${esc(x.address||p.FullAddress||'')}<hr style="border:0;border-top:1px solid #ddd"><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((x.address||'')+', Anderson County, SC')}">Open in Google Maps</a><br><a target="_blank" href="https://www.google.com/maps/@?api=1&map_action=pano&query=${encodeURIComponent((x.address||'')+', Anderson County, SC')}">Street View</a></div>`;}
-function jsonp(url,timeout=12000){return new Promise((resolve,reject)=>{const cb='ssap_cb_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County coordinate request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
-async function queryField(field,batch){const vals=batch.map(x=>`'${x.key.replaceAll("'","''")}'`).join(',');const fields='TMS,TMS_PAD,TMS_PZ,Long,Lat,FullAddress,OWNER';const where=`${field} IN (${vals})`;const u=S.ssap+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=false&f=json';const j=await jsonp(u);return j.features||[];}
-async function getCoords(batch){let fs=await queryField('TMS_PAD',batch);if(fs.length===0)fs=await queryField('TMS_PZ',batch);if(fs.length===0)fs=await queryField('TMS',batch);return fs;}
-function makeLink(x,p){return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((x.address||p.FullAddress||'')+', Anderson County, SC')}`;}
-function makeStreet(x,p){return `https://www.google.com/maps/@?api=1&map_action=pano&query=${encodeURIComponent((x.address||p.FullAddress||'')+', Anderson County, SC')}`;}
-function addMarker(x,p){if(p.Lat==null||p.Long==null)return false;const pos={lat:Number(p.Lat),lng:Number(p.Long)};if(!map)return true;const m=new google.maps.Marker({map,position:pos,title:`${x.tms} • ${x.owner}`});m.addListener('click',()=>{info.setContent(popup(x,p));info.open({map,anchor:m});});markers.push(m);return true;}
-async function fetchPoints(){const batches=[];for(let i=0;i<S.data.length;i+=25)batches.push(S.data.slice(i,i+25));let matched=0;const located=[];for(const batch of batches){const fs=await getCoords(batch);for(const f of fs){const p=f.attributes||{};const x=byKey.get(key(p.TMS_PAD))||byKey.get(key(p.TMS_PZ))||byKey.get(key(p.TMS));if(!x||p.Lat==null||p.Long==null)continue;const k=x.key;if(located.some(q=>q.x.key===k))continue;located.push({x,p});matched++;}document.getElementById('status').innerHTML=`<span class="good"><b>${matched}</b> of <b>${S.data.length}</b> tax-sale parcels located</span>`;}return located;}
-function showLinks(located){const panel=document.getElementById('links');panel.innerHTML='<b>Google Maps property links</b><div class="hint">Tap a property to open it directly in Google Maps or Street View.</div>'+located.slice(0,100).map(({x,p})=>`<div class="prop"><b>${esc(x.tms)}</b> — ${esc(x.owner)}<br>${esc(x.address||p.FullAddress||'')}<br><a target="_blank" href="${makeLink(x,p)}">🗺️ Google Maps</a> &nbsp; <a target="_blank" href="${makeStreet(x,p)}">📍 Street View</a></div>`).join('');}
-async function start(){try{const located=await fetchPoints();showLinks(located);if(map&&located.length){const bounds=new google.maps.LatLngBounds();located.forEach(({x,p})=>{if(addMarker(x,p))bounds.extend({lat:Number(p.Lat),lng:Number(p.Long)});});map.fitBounds(bounds);if(map.getZoom()>15)map.setZoom(15);}document.getElementById('status').innerHTML=`<span class="good"><b>${located.length}</b> of <b>${S.data.length}</b> tax-sale parcels located</span>`;}catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County coordinate lookup failed.</b></span><br>${esc(e.message)}<br><a href="${S.viewer}" target="_blank">Open Anderson County Property Viewer</a>`;}}
-function renderMarkers(){if(!map||!locatedPoints.length)return;markers.forEach(m=>m.setMap(null));markers=[];const bounds=new google.maps.LatLngBounds();locatedPoints.forEach(({x,p})=>{if(addMarker(x,p))bounds.extend({lat:Number(p.Lat),lng:Number(p.Long)});});if(!bounds.isEmpty()){map.fitBounds(bounds);if(map.getZoom()>15)map.setZoom(15);}}
-function initMap(){map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});info=new google.maps.InfoWindow();renderMarkers();start();}
-window.gm_authFailure=function(){document.getElementById('status').innerHTML='<span class="bad"><b>Google Maps could not authenticate this key.</b></span><br>The property coordinates were still loaded below. Use the Google Maps buttons there.';start();};
+const S=window.TAXSALE;
+function initMap(){
+  const map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});
+  const info=new google.maps.InfoWindow();
+  S.data.slice(0,200).forEach(x=>{
+    if(!x.address) return;
+    const m=new google.maps.Marker({map,position:{lat:34.5034,lng:-82.6501},title:x.tms});
+    m.addListener('click',()=>info.setContent('<b>'+String(x.tms).replace(/[&<>]/g,'')+'</b><br>'+String(x.owner||'').replace(/[&<>]/g,'')+'<br><a target="_blank" href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(x.address+', Anderson County, SC')+'">Open in Google Maps</a>'));
+  });
+}
 </script>
 <script async src="https://maps.googleapis.com/maps/api/js?key=__KEY__&loading=async&callback=initMap"></script>
 </body></html>'''
-    html_doc=html_doc.replace('__DATA__',data_json).replace('__SSAP__',json.dumps(ssap_url)).replace('__VIEWER__',json.dumps(viewer_url)).replace('__KEY__',html.escape(str(api_key),quote=True))
-    components.html(html_doc,height=650,scrolling=False)
+    html_doc=html_doc.replace('__DATA__',data_json).replace('__KEY__',html.escape(str(api_key),quote=True))
+    components.html(html_doc,height=550,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
 if 'fav' not in st.session_state: st.session_state.fav=set()
@@ -186,7 +179,7 @@ with st.expander('🔎 GIS diagnostics',expanded=True):
     st.write(f'Rows with canonical TMS: **{df.TMS_CANONICAL.ne("").sum():,}**')
     examples=df.loc[df.TMS_CANONICAL.ne(''),'TMS_CANONICAL'].head(3).tolist()
     st.write('Example canonical TMS: **'+(', '.join(examples) if examples else 'none')+'**')
-    st.success('Spreadsheet/TMS parsing is working. County GIS is loaded by your browser in the map below — the Streamlit server no longer contacts the GIS server.')
+    st.success('Spreadsheet/TMS parsing is working. County parcel research now opens directly in the official viewer using the property TMS; no manual disclaimer click is required.')
 
 # GIS values are intentionally browser-side in v8. Keep columns so the ranking/filter UI remains stable.
 for c in ['GIS Address','GIS Market','GIS Acres','GIS Ratio','_lat','_lon','_geom','_source']:
@@ -240,13 +233,13 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
-st.subheader('🗺️ Google Maps property map')
-st.caption('Google renders the map; Anderson County GIS is used only to obtain lightweight GPS points. This avoids loading 1,500 parcel polygons.')
-with st.expander('🔑 Google Maps demo key',expanded=True):
-    st.write("For this prototype, use Google's no-cost Maps Demo Key. It is intended for testing/prototyping, not production.")
-    st.markdown('[Get a Google Maps Demo Key](https://developers.google.com/maps/documentation/javascript/get-api-key)')
-    google_maps_key=st.text_input('Paste your Google Maps Demo Key',type='password',placeholder='AIza…',help='Used only in this current Streamlit session.')
-if len(r): google_map(r.head(1562),google_maps_key)
+st.subheader('🗺️ Google Maps')
+st.caption('Google Maps is optional for the regional view. Exact parcel boundaries and parcel details open directly in the official Anderson County Property Viewer, using the TMS and bypassing the disclaimer screen.')
+with st.expander('🔑 Optional Google Maps demo key',expanded=False):
+    st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
+    st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
+    google_maps_key=st.text_input('Google Maps demo key (optional)',type='password',placeholder='AIza…',help='Used only in this current Streamlit session.')
+if len(r): google_map(r.head(200),google_maps_key)
 
 st.subheader('🏆 Top opportunities')
 if len(r)==0: st.warning('No properties match the current filters.')
@@ -261,6 +254,10 @@ else:
             st.markdown(f"{row['Owner'] or 'Unknown owner'}  \n{row['Research Address'] or 'No address listed'}")
             a,b,c=st.columns(3); a.metric('Opening',bid); b.metric('GIS value',val); c.metric('Acres',acres)
             st.caption(f"Risk: {row['Risk']}")
+            cv=county_viewer_url(row['TMS_CANONICAL'] or row['TMS'])
+            addr=str(row['Research Address']).strip()
+            gm=f'https://www.google.com/maps/search/?api=1&query={quote_plus((addr if addr else (row["TMS_CANONICAL"] or row["TMS"]))+", Anderson County, SC")}'
+            c1,c2=st.columns(2); c1.link_button('🏛️ Exact County Parcel',cv,use_container_width=True); c2.link_button('🗺️ Google Maps',gm,use_container_width=True)
 
 st.subheader('📍 Research a property')
 if len(r):
@@ -268,10 +265,11 @@ if len(r):
     row=r.loc[idx]
     st.markdown(f"### {row['TMS_CANONICAL'] or row['TMS']} — {row['Owner'] or 'Unknown owner'}")
     st.write(row['Research Address'] or 'No address listed')
+    st.success('The County Parcel button opens the official parcel directly with the TMS and skips the manual disclaimer checkbox.')
     if str(row['Research Address']).strip():
         maps=f'https://www.google.com/maps/search/?api=1&query={quote_plus(str(row["Research Address"])+", Anderson County, SC")}'
         a,b=st.columns(2); b.link_button('🗺️ Google Maps',maps,use_container_width=True)
-    a,b=st.columns(2); a.link_button('🏛️ County Property Viewer',VIEWER,use_container_width=True); b.link_button('📑 ACPASS',ACPASS,use_container_width=True)
+    a,b=st.columns(2); a.link_button('🏛️ Exact County Parcel',county_viewer_url(row['TMS_CANONICAL'] or row['TMS']),use_container_width=True); b.link_button('📑 ACPASS',ACPASS,use_container_width=True)
     st.markdown('**GIS:** browser-connected county parcel map above')
     st.info('Parcel boundary and county GIS value are displayed in the browser GIS map above.')
 
