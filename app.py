@@ -86,57 +86,53 @@ def county_viewer_url(tms):
 
 @st.cache_data(ttl=86400,show_spinner=False)
 def property_cross_reference(address, tms=''):
-    """Search public web results for the exact property address.
-    We do not scrape Zillow/Realtor pages directly; we use search-result snippets and
-    require property facts such as bedrooms, bathrooms, or square footage before
-    treating the result as house evidence.
+    """Verify house evidence from public search results.
+    This is deliberately evidence-based: beds + baths + sqft are searched for the
+    exact county address. A missing web result is NOT treated as vacant land.
     """
     addr=str(address or '').strip()
     if not addr:
-        return {'status':'NO_ADDRESS','sources':{},'house_evidence':False,'mobile_evidence':False}
-    queries={
-        'Zillow': f'site:zillow.com/homedetails "{addr}" "Anderson SC"',
-        'Realtor.com': f'site:realtor.com/realestateandhomes "{addr}" "Anderson SC"',
-        'Redfin': f'site:redfin.com/SC/Anderson "{addr}" "Anderson SC"',
-    }
-    out={}
+        return {'status':'NO_ADDRESS','sources':{},'house_evidence':False,'mobile_evidence':False,
+                'evidence_sources':[],'mobile_sources':[]}
+    # One combined search per property is much more reliable than three separate
+    # searches and keeps verification practical for a tax-sale list.
+    q=f'"{addr}" "Anderson SC" (Zillow OR Realtor.com OR Redfin)'
     ua={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36'}
-    for label,q in queries.items():
-        info={'found':False,'beds':None,'baths':None,'sqft':None,'mobile':False,'snippet':''}
-        try:
-            u='https://www.google.com/search?hl=en&num=5&q='+quote_plus(q)
-            rr=requests.get(u,headers=ua,timeout=12)
-            txt=html.unescape(re.sub(r'<[^>]+>',' ',rr.text))
-            txt=re.sub(r'\s+',' ',txt)
-            low=txt.lower()
-            # Search only around the requested address when possible.
-            pos=low.find(addr.lower())
-            snippet=txt[max(0,pos-250):pos+1400] if pos>=0 else txt[:1800]
-            slow=snippet.lower()
-            beds=re.search(r'(?<!\d)(\d{1,2})\s*(?:bd|beds|bedrooms?)\b',slow)
-            baths=re.search(r'(?<!\d)(\d{1,2}(?:\.5)?)\s*(?:ba|baths|bathrooms?)\b',slow)
-            sqft=re.search(r'(?<!\d)([\d,]{3,8})\s*(?:sq\.?\s*ft|sqft|square feet)\b',slow)
-            info['beds']=int(beds.group(1)) if beds else None
-            info['baths']=float(baths.group(1)) if baths else None
-            info['sqft']=int(sqft.group(1).replace(',','')) if sqft else None
-            info['mobile']=bool(re.search(r'\bmobile(?:/|\s|-)?manufactured|manufactured home|mobile home\b',slow))
-            info['found']=bool(pos>=0 and (info['beds'] is not None or info['baths'] is not None or info['sqft'] is not None or info['mobile']))
-            info['snippet']=re.sub(r'\s+',' ',snippet)[:900]
-        except Exception as e:
-            info['error']=str(e)
-        out[label]=info
-    evidence=[]; mobile=[]
-    for label,info in out.items():
-        fields=sum(v is not None for v in [info.get('beds'),info.get('baths'),info.get('sqft')])
-        if fields>=2: evidence.append(label)
-        if info.get('mobile'): mobile.append(label)
-    if evidence or mobile:
-        status='HOUSE_EVIDENCE'
-    elif any(v.get('found') for v in out.values()):
-        status='WEAK_EVIDENCE'
-    else:
-        status='NO_MATCH'
-    return {'status':status,'sources':out,'house_evidence':bool(evidence),'mobile_evidence':bool(mobile),'evidence_sources':evidence,'mobile_sources':mobile}
+    text=''; raw=''
+    try:
+        u='https://www.google.com/search?hl=en&num=10&q='+quote_plus(q)
+        rr=requests.get(u,headers=ua,timeout=10)
+        raw=rr.text
+        text=html.unescape(re.sub(r'<[^>]+>',' ',raw))
+        text=re.sub(r'\s+',' ',text)
+    except Exception as e:
+        return {'status':'SEARCH_ERROR','sources':{'Web search':{'found':False,'error':str(e),'beds':None,'baths':None,'sqft':None,'mobile':False,'snippet':''}},'house_evidence':False,'mobile_evidence':False,'evidence_sources':[],'mobile_sources':[]}
+    low=text.lower()
+    pos=low.find(addr.lower())
+    snippet=text[max(0,pos-500):pos+5000] if pos>=0 else text[:7000]
+    slow=snippet.lower()
+    # Search-result snippets often write 3 bd, 2 ba, 1,456 sqft.
+    bed_matches=re.findall(r'(?<!\d)(\d{1,2})\s*(?:bd|beds|bedrooms?)\b',slow)
+    bath_matches=re.findall(r'(?<!\d)(\d{1,2}(?:\.5)?)\s*(?:ba|baths|bathrooms?)\b',slow)
+    sqft_matches=re.findall(r'(?<!\d)([\d,]{3,8})\s*(?:sq\.?\s*ft|sqft|square feet)\b',slow)
+    beds=int(bed_matches[0]) if bed_matches else None
+    baths=float(bath_matches[0]) if bath_matches else None
+    sqft=int(sqft_matches[0].replace(',','')) if sqft_matches else None
+    mobile=bool(re.search(r'\b(?:mobile|manufactured)(?:\s+home)?\b|mobile/manufactured',slow))
+    # Identify which target sites appeared in the returned text.
+    sources=[]
+    if 'zillow' in low: sources.append('Zillow')
+    if 'realtor.com' in low or 'realtor ' in low: sources.append('Realtor.com')
+    if 'redfin' in low: sources.append('Redfin')
+    if not sources: sources=['Web search']
+    facts=sum(v is not None for v in (beds,baths,sqft))
+    house=facts>=2
+    status='HOUSE_EVIDENCE' if house else ('MOBILE_EVIDENCE' if mobile else ('WEAK_EVIDENCE' if facts==1 else 'NO_MATCH'))
+    # Populate source rows for the UI; exact attribution is conservative.
+    per={name:{'found':house or mobile,'beds':beds,'baths':baths,'sqft':sqft,'mobile':mobile,'snippet':snippet[:1200]} for name in sources}
+    return {'status':status,'sources':per,'house_evidence':house,'mobile_evidence':mobile,
+            'evidence_sources':sources if house else [],'mobile_sources':sources if mobile else [],
+            'beds':beds,'baths':baths,'sqft':sqft,'mobile':mobile,'snippet':snippet[:1200]}
 
 def google_map(rows, api_key):
     """Interactive parcel map using direct TMS parcel queries.
@@ -190,9 +186,9 @@ function houseClue(x){return !!x.house || /\b(HOUSE|RESIDENCE|DWELLING|HOME|SING
 function mobileClue(x){return !!x.mobile || /\b(MOBILE|MANUFACTURED|MOBILE HOME)\b/.test(String(x.address||'').toUpperCase());}
 function improved(p){return String(p.IMPRV??'').trim()!=='';}
 function statusLabel(p){return improved(p)?'County-improved (IMPRV '+esc(p.IMPRV)+')':'No county improvement indicator';}
-function category(x,p){if(mobileClue(x)||x.web_mobile)return 'mobile'; if(x.web_house||houseClue(x)||String(p.CLASS||'').trim().toUpperCase()==='R')return 'house'; return 'land';}
+function category(x,p){if(x.web_mobile||mobileClue(x))return 'mobile'; if(x.web_house||houseClue(x))return 'house'; return 'land';}
 function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':'#2e7d32');}
-function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House indicated':'Land / other'); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>House verification:</b> ${x.web_house?'External web evidence found':(String(p.CLASS||'').toUpperCase()==='R'?'County residential/homestead class':'Not verified')}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House indicated':'Land / other'); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>House verification:</b> ${x.web_house?'ONLINE HOUSE VERIFIED':(x.web_mobile?'ONLINE MOBILE HOME EVIDENCE':(houseClue(x)?'Tax-sale description house clue':'Not verified online'))}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
@@ -274,6 +270,8 @@ loadGoogleThenStart();
 if 'data' not in st.session_state: st.session_state.data=None
 if 'fav' not in st.session_state: st.session_state.fav=set()
 if 'notes' not in st.session_state: st.session_state.notes={}
+if 'web_xref' not in st.session_state: st.session_state.web_xref={}
+
 
 with st.expander('⚙️ Data & county research links'):
     up=st.file_uploader('Upload county 2026 Excel',type=['xlsx','xls'])
@@ -352,7 +350,7 @@ with st.expander('🔎 Filters',expanded=True):
     ma=c3.number_input('Minimum acres',0.,10000.,0.,.1)
     mx=c4.number_input('Maximum acres',0.,10000.,10000.,.1)
     c5,c6=st.columns(2)
-    c5.info('House colors now use a stronger county residential/homestead signal (CLASS=R) plus explicit house/mobile clues. The county says IMPRV can mean a house, barn, garage, fence, etc., so IMPRV alone is not treated as a house.')
+    c5.info('Map colors use verified online house evidence when available. Zillow/Realtor/Redfin facts are only counted when at least two of bedrooms, bathrooms, or square footage are found. County IMPRV alone is NOT treated as a house.')
     minval=0
 
     st.markdown('**Property type — turn categories on/off**')
@@ -385,6 +383,46 @@ if show_land:
 mask &= property_type_mask
 if st.session_state.get('five_plus',False): mask &= df['Acres'].fillna(0)>=5
 r=df.loc[mask].copy()
+
+# Apply cached web verification to the filtered rows. Verification is opt-in so the
+# app does not silently make hundreds of external requests on every page refresh.
+if st.session_state.web_xref:
+    df['Web House Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('house_evidence',False)))
+    df['Web Mobile Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('mobile_evidence',False)))
+    df['Web Beds']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('beds'))
+    df['Web Baths']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('baths'))
+    df['Web Sqft']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('sqft'))
+else:
+    for cc in ['Web House Evidence','Web Mobile Evidence','Web Beds','Web Baths','Web Sqft']: df[cc]=False if 'Evidence' in cc else pd.NA
+
+vcol1,vcol2=st.columns([2,1])
+with vcol1:
+    st.markdown('### 🔎 Online house verification')
+    st.caption('Checks the exact property address against public search results for Zillow, Realtor.com and Redfin. A house is verified only when at least two of bedrooms, bathrooms, or square footage are found. No match does NOT mean vacant land.')
+with vcol2:
+    verify_now=st.button(f'🔎 Verify {min(len(r),200)} properties online',use_container_width=True)
+if verify_now and len(r):
+    todo=r.head(200)
+    progress=st.progress(0)
+    status=st.empty()
+    for n,(idx,row) in enumerate(todo.iterrows(),1):
+        keyv=str(row['TMS_KEY'] or '')
+        if not keyv or keyv in st.session_state.web_xref: 
+            progress.progress(n/len(todo)); continue
+        addr=str(row['Research Address'] or row['Address'] or '').strip()
+        status.write(f'Checking {n} of {len(todo)}: {addr or row["TMS_CANONICAL"]}')
+        st.session_state.web_xref[keyv]=property_cross_reference(addr,keyv)
+        progress.progress(n/len(todo))
+    status.success(f'Online verification complete for {len(todo)} properties. Map colors will now use the verified evidence.')
+    st.rerun()
+
+# Re-read cached evidence after a verification pass.
+if st.session_state.web_xref:
+    df['Web House Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('house_evidence',False)))
+    df['Web Mobile Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('mobile_evidence',False)))
+    df['Web Beds']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('beds'))
+    df['Web Baths']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('baths'))
+    df['Web Sqft']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('sqft'))
 
 # Lightweight automated score.
 def txtblob(x): return str(x).lower()
