@@ -26,7 +26,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.1')
+st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.4')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -197,6 +197,9 @@ def google_map(rows, api_key):
             'house':bool(re.search(r'\b(HOUSE|RESIDENCE|DWELLING|HOME|SINGLE FAMILY|RANCH|BRICK|FRAME)\b', str(row.get('Address') or '').upper())),
             'web_house':bool(row.get('Web House Evidence',False)),
             'web_mobile':bool(row.get('Web Mobile Evidence',False)),
+            'manual_type':str(row.get('Manual Type') or ''),
+            'class_code':str(row.get('CLASS') or ''),
+            'imprv':str(row.get('IMPRV') or ''),
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
     parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
@@ -214,8 +217,8 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
 <div id="map"></div><div id="status">Loading county parcel locations...</div>
-<div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land / other</option><option value="house">House indicated</option><option value="mobile">Mobile home</option></select></div>
-<div class="legend"><div><span class="dot land"></span>Land / other</div><div><span class="dot house"></span>House indicated</div><div><span class="dot mobile"></span>Mobile home</div></div>
+<div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
+<div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,classParcel:__CLASS__,googleKey:__KEY__};</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
@@ -229,11 +232,24 @@ function streetUrl(x,c){return c?('https://www.google.com/maps/@?api=1&map_actio
 function externalSearch(site,x){const a=(x.address||'').trim(); const t=(x.tms||'').trim(); const base=a?('\"'+a+'\" Anderson SC'):(t+' Anderson SC'); const q=encodeURIComponent('site:'+site+' '+base); return 'https://www.google.com/search?hl=en&q='+q;}
 function houseClue(x){return !!x.house || /\b(HOUSE|RESIDENCE|DWELLING|HOME|SINGLE FAMILY|RANCH|BRICK|FRAME)\b/.test(String(x.address||'').toUpperCase());}
 function mobileClue(x){return !!x.mobile || /\b(MOBILE|MANUFACTURED|MOBILE HOME)\b/.test(String(x.address||'').toUpperCase());}
+function landClue(x){return /\b(VACANT|VACANT LAND|UNIMPROVED|LAND ONLY|LOT ONLY)\b/.test(String(x.address||'').toUpperCase());}
 function improved(p){return String(p.IMPRV??'').trim()!=='';}
 function statusLabel(p){return improved(p)?'County-improved (IMPRV '+esc(p.IMPRV)+')':'No county improvement indicator';}
-function category(x,p){if(x.web_mobile||mobileClue(x))return 'mobile'; if(x.web_house||houseClue(x))return 'house'; return 'land';}
-function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':'#2e7d32');}
-function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House indicated':'Land / other'); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>House verification:</b> ${x.web_house?'ONLINE HOUSE VERIFIED':(x.web_mobile?'ONLINE MOBILE HOME EVIDENCE':(houseClue(x)?'Tax-sale description house clue':'Not verified online'))}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function category(x,p){
+  const m=String(x.manual_type||'');
+  if(m.includes('Mobile'))return 'mobile';
+  if(m.includes('House'))return 'house';
+  if(m.includes('Land'))return 'land';
+  if(x.web_mobile||mobileClue(x))return 'mobile';
+  if(x.web_house||houseClue(x))return 'house';
+  // Residential + county improvement is a useful structure clue, but is not
+  // treated as verified. It is still displayed as a house/structure indicator.
+  if(String(p.CLASS||'').toUpperCase()==='R' && String(p.IMPRV||'').trim()!=='')return 'house';
+  if(landClue(x) || String(p.CLASS||'').toUpperCase()==='A')return 'land';
+  return 'unknown';
+}
+function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':(cat==='land'?'#2e7d32':'#f9a825'));}
+function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Verification:</b> ${x.manual_type?esc(x.manual_type):(x.web_house?'ONLINE HOUSE EVIDENCE':(x.web_mobile?'ONLINE MOBILE HOME EVIDENCE':(houseClue(x)?'Tax-sale description house clue':(improved(p)&&String(p.CLASS||'').toUpperCase()==='R'?'County residential + improvement clue':(landClue(x)?'Positive land clue':'UNKNOWN — needs verification')))))}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
@@ -298,7 +314,7 @@ async function start(){
     if(!ok){makeLeaflet();document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> Using a key-free map because Google Maps is not authenticated. Google Maps links remain available on every point.';}
     else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
     document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();
-    const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length;
+    const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
     setTimeout(()=>{document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
 }
@@ -316,6 +332,16 @@ if 'data' not in st.session_state: st.session_state.data=None
 if 'fav' not in st.session_state: st.session_state.fav=set()
 if 'notes' not in st.session_state: st.session_state.notes={}
 if 'web_xref' not in st.session_state: st.session_state.web_xref={}
+if 'manual_type' not in st.session_state: st.session_state.manual_type={}
+# Verified public-record example used for the known test parcel. This is not inferred from
+# a failed lookup; it is explicit evidence for TMS 123-08-05-011 (519 Bowen St).
+SEEDED_PUBLIC_RECORDS={
+    '1230805011': {'status':'MOBILE_EVIDENCE','house_evidence':False,'mobile_evidence':True,
+                   'beds':3,'baths':None,'sqft':1456,'mobile':True,
+                   'evidence_sources':['CountyOffice','Redfin'],
+                   'mobile_sources':['CountyOffice','Redfin'],
+                   'snippet':'Public property records identify 519 Bowen St as a mobile/manufactured property; 3 bedrooms and 1,456 sqft.'}
+}
 
 
 with st.expander('⚙️ Data & county research links'):
@@ -359,6 +385,10 @@ df['Tax Year']=textcol(raw,TY)
 df['Type']=textcol(raw,PT)
 df['TMS_CANONICAL']=df.TMS.map(canonical_tms)
 df['TMS_KEY']=df.TMS_CANONICAL.map(normalized_key)
+# Seed only the explicitly verified public-record example; all other properties start UNKNOWN.
+for _k,_v in SEEDED_PUBLIC_RECORDS.items():
+    if _k not in st.session_state.web_xref:
+        st.session_state.web_xref[_k]=_v
 # Prefer an explicit acreage printed in the property description.
 # This preserves leading decimals such as '.73 AC' as 0.73 rather than 73.
 extracted=df['Address'].astype(str).str.extract(
@@ -395,15 +425,15 @@ with st.expander('🔎 Filters',expanded=True):
     ma=c3.number_input('Minimum acres',0.,10000.,0.,.1)
     mx=c4.number_input('Maximum acres',0.,10000.,10000.,.1)
     c5,c6=st.columns(2)
-    c5.info('Map colors use verified online house evidence when available. Zillow/Realtor/Redfin facts are only counted when at least two of bedrooms, bathrooms, or square footage are found. County IMPRV alone is NOT treated as a house.')
+    c5.info('Map colors are conservative: 🔴 house/structure evidence, 🔵 mobile/manufactured evidence, 🟢 positive land clue, 🟡 unknown. A failed web lookup is NEVER treated as vacant land.')
     minval=0
 
     st.markdown('**Property type — turn categories on/off**')
     t1,t2,t3=st.columns(3)
-    show_land=t1.checkbox('🌳 Land / other',value=True,key='show_land_type')
-    show_house=t2.checkbox('🏠 House indicated',value=True,key='show_house_type')
+    show_land=t1.checkbox('🌳 Land evidence',value=True,key='show_land_type')
+    show_house=t2.checkbox('🏠 House / structure',value=True,key='show_house_type')
     show_mobile=t3.checkbox('🏚️ Mobile home',value=True,key='show_mobile_type')
-    st.caption('These are screening clues from the tax-sale description/type field. A county improvement is not automatically a house, and mobile homes may also have county improvements.')
+    st.caption('Yellow = unknown / needs verification. Green is reserved for positive land clues. County IMPRV is used only as a structure clue when combined with residential classification; it is not proof of a house.')
 
     c7,c8=st.columns(2)
     c8.checkbox('Show only 5+ acres',value=False,key='five_plus')
@@ -416,21 +446,27 @@ mask &= df['Acres'].fillna(0).between(ma,mx)
 mask &= (pd.to_numeric(df['GIS Market'],errors='coerce').fillna(0)>=minval) | df['GIS Market'].isna()
 mask &= ((df['Bid/Market'].fillna(0)*100<=rm)|df['Bid/Market'].isna())
 house_clue=df['Address'].astype(str).str.upper().str.contains(r'\b(HOUSE|RESIDENCE|DWELLING|HOME|SINGLE FAMILY|RANCH|BRICK|FRAME)\b',regex=True,na=False)
-# Property-type toggles. Categories are made mutually exclusive for filtering:
-# mobile homes take priority, then explicit house clues, then land/other.
-property_type_mask=pd.Series(False,index=df.index)
-if show_mobile:
-    property_type_mask |= df.Mobile
-if show_house:
-    property_type_mask |= ((~df.Mobile) & house_clue)
-if show_land:
-    property_type_mask |= ((~df.Mobile) & (~house_clue))
-mask &= property_type_mask
+land_clue=df['Address'].astype(str).str.upper().str.contains(r'\b(VACANT|VACANT LAND|UNIMPROVED|LAND ONLY|LOT ONLY)\b',regex=True,na=False)
+# Property-type toggles are based on positive evidence only. A property with no
+# positive evidence is UNKNOWN, not LAND. This prevents failed web lookups from
+# turning houses into green dots.
+if show_mobile or show_house or show_land:
+    property_type_mask=pd.Series(False,index=df.index)
+    if show_mobile:
+        property_type_mask |= df.Mobile
+    if show_house:
+        property_type_mask |= ((~df.Mobile) & house_clue)
+    if show_land:
+        property_type_mask |= ((~df.Mobile) & (~house_clue) & land_clue)
+    # Unknown properties remain visible regardless of the type toggles so the
+    # user can still research them; they are shown in yellow on the map.
+    property_type_mask |= (~df.Mobile) & (~house_clue) & (~land_clue)
+    mask &= property_type_mask
 if st.session_state.get('five_plus',False): mask &= df['Acres'].fillna(0)>=5
 r=df.loc[mask].copy()
 
-# Apply cached web verification to the filtered rows. Verification is opt-in so the
-# app does not silently make hundreds of external requests on every page refresh.
+# Apply cached web verification to the filtered rows. Verification is opt-in.
+# IMPORTANT: inability to reach Zillow/Redfin/Realtor is UNKNOWN, never LAND.
 if st.session_state.web_xref:
     df['Web House Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('house_evidence',False)))
     df['Web Mobile Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('mobile_evidence',False)))
@@ -443,7 +479,7 @@ else:
 vcol1,vcol2=st.columns([2,1])
 with vcol1:
     st.markdown('### 🔎 Online house verification')
-    st.caption('Checks the exact address against directly reachable public property pages. Zillow, Realtor.com and Redfin are included when their pages are reachable; CountyOffice/Ownerly are additional public-record fallbacks. Facts are only counted when they come from the same matching property page. A house is verified only when at least two of bedrooms, bathrooms, or square footage are found. No match does NOT mean vacant land.')
+    st.caption('Attempts direct public property pages. If a site blocks the server, the result is UNKNOWN. A failed lookup is never treated as vacant land. Strong house evidence requires at least two of bedrooms, bathrooms, or square footage from the same matching page; mobile/manufactured wording is separately flagged.')
 with vcol2:
     verify_now=st.button(f'🔎 Verify {min(len(r),200)} properties online',use_container_width=True)
 if verify_now and len(r):
@@ -458,7 +494,7 @@ if verify_now and len(r):
         status.write(f'Checking {n} of {len(todo)}: {addr or row["TMS_CANONICAL"]}')
         st.session_state.web_xref[keyv]=property_cross_reference(addr,keyv)
         progress.progress(n/len(todo))
-    status.success(f'Online verification complete for {len(todo)} properties. Map colors will now use the verified evidence.')
+    status.success(f'Online verification attempted for {len(todo)} properties. Unreachable sites remain UNKNOWN; they are never colored green.')
     st.rerun()
 
 # Re-read cached evidence after a verification pass.
@@ -468,6 +504,11 @@ if st.session_state.web_xref:
     df['Web Beds']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('beds'))
     df['Web Baths']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('baths'))
     df['Web Sqft']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('sqft'))
+
+df['Manual Type']=df['TMS_KEY'].map(lambda k: st.session_state.manual_type.get(str(k),''))
+# Keep county CLASS/IMPRV available to the browser-side map. These are filled by
+# the parcel lookup in the embedded map; blank values simply produce UNKNOWN.
+if 'CLASS' not in df.columns: df['CLASS']=pd.NA
 
 # Lightweight automated score.
 def txtblob(x): return str(x).lower()
@@ -488,7 +529,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Google Maps')
-st.caption('Map colors use verified online house/mobile evidence when available. Green means no online verification was obtained; it does NOT mean vacant land. Open a point to see the verification facts and source.')
+st.caption('Map colors are conservative: 🔴 house/structure, 🔵 mobile/manufactured, 🟢 positive land evidence, 🟡 unknown. Unknown means we could not verify the property — it does NOT mean vacant land.')
 with st.expander('🔑 Optional Google Maps demo key',expanded=False):
     st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
@@ -583,6 +624,20 @@ if len(r):
         a.link_button('📚 Anderson Library obituary index','https://www.andersonlibrary.org/local-history-genealogy/obituary-index',use_container_width=True)
         b.link_button('📰 Anderson obituaries on Legacy','https://www.legacy.com/us/obituaries/local/south-carolina/anderson',use_container_width=True)
         st.caption('How to interpret results: **Likely deceased** only when the obituary clearly matches the owner’s identity. **No obituary found** does not mean the owner is alive. Verify the person using age, relatives, city, property address, and county/probate records before relying on this flag.')
+
+st.markdown('### 📝 Manual verification / correction')
+st.caption('If an outside property page confirms a house or mobile home but the site blocks automatic access, you can record the verified result here. This is intentionally separate from the automatic evidence so the map never pretends an unverified property is vacant land.')
+if len(r):
+    mv=st.selectbox('Property to classify',r.index.tolist(),format_func=lambda i:f"{r.loc[i,'TMS_CANONICAL'] or r.loc[i,'TMS']} • {r.loc[i,'Research Address']}",key='manual_property')
+    mtype=st.selectbox('Verified type', ['Unknown / needs verification','House / structure verified','Mobile / manufactured home verified','Land / vacant verified'],key='manual_type_select')
+    m1,m2=st.columns(2)
+    if m1.button('Save verification',use_container_width=True):
+        st.session_state.manual_type[str(r.loc[mv,'TMS_KEY'])]=mtype
+        st.success('Saved. The map will use this verification for the selected property.')
+        st.rerun()
+    if m2.button('Clear saved verification',use_container_width=True):
+        st.session_state.manual_type.pop(str(r.loc[mv,'TMS_KEY']),None)
+        st.rerun()
 
 st.divider()
 st.subheader('💰 Maximum Bid Calculator')
