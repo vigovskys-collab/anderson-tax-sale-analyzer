@@ -1,9 +1,10 @@
-# Anderson County SC Tax Sale Analyzer v9.9.1
+# Anderson County SC Tax Sale Analyzer v10.0
 
-This build fixes two problems from v9.9:
+New in v10.0:
+- Selected-property web cross-reference for Zillow, Realtor.com, and Redfin.
+- Extracts bedrooms, bathrooms, and square footage from public search-result snippets when available.
+- Strong house evidence requires at least two of those property facts; mobile/manufactured wording is separately flagged.
+- No match is never treated as proof that a parcel is vacant land.
+- Existing map, county parcel, Google Maps, Street View, acreage, bid, and property-type filters are preserved.
 
-- Map marker colors now actually use the property-type classification: green = Land / other, red = House indicated, blue = Mobile home.
-- The map property-type dropdown now filters those same three categories.
-- Zillow and Realtor.com buttons now send a correctly formed Google site-search for the exact property address instead of the broken `+a+` query.
-
-The external listing searches are research aids only. A missing Zillow/Realtor result does not prove that a property has no house.
+The web cross-reference runs on demand for the selected property and is cached for 24 hours to avoid repeatedly querying the same address.

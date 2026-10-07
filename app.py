@@ -25,7 +25,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v9.9')
+st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.0')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -82,6 +82,60 @@ def normalized_key(x):
 def county_viewer_url(tms):
     key=normalized_key(tms)
     return f'https://propertyviewer.andersoncountysc.org/mapsjs/?TMS={quote_plus(key)}&disclaimer=false' if key else 'https://propertyviewer.andersoncountysc.org/mapsjs/?disclaimer=false'
+
+@st.cache_data(ttl=86400,show_spinner=False)
+def property_cross_reference(address, tms=''):
+    """Search public web results for the exact property address.
+    We do not scrape Zillow/Realtor pages directly; we use search-result snippets and
+    require property facts such as bedrooms, bathrooms, or square footage before
+    treating the result as house evidence.
+    """
+    addr=str(address or '').strip()
+    if not addr:
+        return {'status':'NO_ADDRESS','sources':{},'house_evidence':False,'mobile_evidence':False}
+    queries={
+        'Zillow': f'site:zillow.com/homedetails "{addr}" "Anderson SC"',
+        'Realtor.com': f'site:realtor.com/realestateandhomes "{addr}" "Anderson SC"',
+        'Redfin': f'site:redfin.com/SC/Anderson "{addr}" "Anderson SC"',
+    }
+    out={}
+    ua={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36'}
+    for label,q in queries.items():
+        info={'found':False,'beds':None,'baths':None,'sqft':None,'mobile':False,'snippet':''}
+        try:
+            u='https://www.google.com/search?hl=en&num=5&q='+quote_plus(q)
+            rr=requests.get(u,headers=ua,timeout=12)
+            txt=html.unescape(re.sub(r'<[^>]+>',' ',rr.text))
+            txt=re.sub(r'\s+',' ',txt)
+            low=txt.lower()
+            # Search only around the requested address when possible.
+            pos=low.find(addr.lower())
+            snippet=txt[max(0,pos-250):pos+1400] if pos>=0 else txt[:1800]
+            slow=snippet.lower()
+            beds=re.search(r'(?<!\d)(\d{1,2})\s*(?:bd|beds|bedrooms?)\b',slow)
+            baths=re.search(r'(?<!\d)(\d{1,2}(?:\.5)?)\s*(?:ba|baths|bathrooms?)\b',slow)
+            sqft=re.search(r'(?<!\d)([\d,]{3,8})\s*(?:sq\.?\s*ft|sqft|square feet)\b',slow)
+            info['beds']=int(beds.group(1)) if beds else None
+            info['baths']=float(baths.group(1)) if baths else None
+            info['sqft']=int(sqft.group(1).replace(',','')) if sqft else None
+            info['mobile']=bool(re.search(r'\bmobile(?:/|\s|-)?manufactured|manufactured home|mobile home\b',slow))
+            info['found']=bool(pos>=0 and (info['beds'] is not None or info['baths'] is not None or info['sqft'] is not None or info['mobile']))
+            info['snippet']=re.sub(r'\s+',' ',snippet)[:900]
+        except Exception as e:
+            info['error']=str(e)
+        out[label]=info
+    evidence=[]; mobile=[]
+    for label,info in out.items():
+        fields=sum(v is not None for v in [info.get('beds'),info.get('baths'),info.get('sqft')])
+        if fields>=2: evidence.append(label)
+        if info.get('mobile'): mobile.append(label)
+    if evidence or mobile:
+        status='HOUSE_EVIDENCE'
+    elif any(v.get('found') for v in out.values()):
+        status='WEAK_EVIDENCE'
+    else:
+        status='NO_MATCH'
+    return {'status':status,'sources':out,'house_evidence':bool(evidence),'mobile_evidence':bool(mobile),'evidence_sources':evidence,'mobile_sources':mobile}
 
 def google_map(rows, api_key):
     """Interactive parcel map using direct TMS parcel queries.
@@ -337,7 +391,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Google Maps')
-st.caption('Google Maps is optional for the regional view. Exact parcel boundaries and parcel details open directly in the official Anderson County Property Viewer, using the TMS and bypassing the disclaimer screen.')
+st.caption('Google Maps is optional for the regional view. Map colors are based on county/tax-sale clues. Use the property cross-reference below a selected parcel to confirm bedrooms, bathrooms, square footage, or mobile/manufactured status from Zillow, Realtor.com, or Redfin.')
 with st.expander('🔑 Optional Google Maps demo key',expanded=False):
     st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
@@ -382,6 +436,32 @@ if len(r):
     a,b=st.columns(2); a.link_button('🏛️ Exact County Parcel',county_viewer_url(row['TMS_CANONICAL'] or row['TMS']),use_container_width=True); b.link_button('📑 ACPASS',ACPASS,use_container_width=True)
     st.markdown('**GIS:** browser-connected county parcel map above')
     st.info('Parcel boundary and county GIS value are displayed in the browser GIS map above.')
+
+    st.markdown('### 🏠 Zillow / Realtor / Redfin house cross-reference')
+    st.caption('The app checks public search-result data for this exact address. A property is treated as strong house evidence when at least two of these are found: bedrooms, bathrooms, or square footage. A mobile/manufactured-home description is also flagged. No match does NOT prove vacant land.')
+    if str(row['Research Address']).strip():
+        with st.spinner('Checking Zillow, Realtor.com and Redfin for property facts…'):
+            xref=property_cross_reference(str(row['Research Address']),str(row['TMS_CANONICAL'] or row['TMS']))
+        if xref['house_evidence']:
+            st.success('🏠 HOUSE EVIDENCE FOUND — property facts were found on: '+', '.join(xref['evidence_sources']))
+        elif xref['mobile_evidence']:
+            st.success('🏚️ MOBILE / MANUFACTURED HOME EVIDENCE FOUND — '+', '.join(xref['mobile_sources']))
+        elif xref['status']=='WEAK_EVIDENCE':
+            st.warning('⚠️ A possible property match was found, but not enough bedroom/bath/sqft facts were available to call it a house automatically.')
+        else:
+            st.info('No matching bedroom/bath/sqft data was returned. This is NOT proof that the property is vacant land.')
+        rows=[]
+        for source,info in xref['sources'].items():
+            facts=[]
+            if info.get('beds') is not None: facts.append(f"{int(info['beds'])} bed")
+            if info.get('baths') is not None: facts.append(f"{info['baths']:g} bath")
+            if info.get('sqft') is not None: facts.append(f"{info['sqft']:,} sqft")
+            if info.get('mobile'): facts.append('mobile/manufactured')
+            rows.append({'Source':source,'Facts':', '.join(facts) if facts else 'No property facts found','Match': 'Yes' if info.get('found') else 'No'})
+        st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
+        st.caption('For tax-sale screening, this is evidence only. The exact county parcel remains the controlling parcel identity. Zillow/Realtor/Redfin records can be missing, stale, or associated with a neighboring parcel.')
+    else:
+        st.info('No physical address is available for an automatic property cross-reference.')
 
     st.markdown('### 🕯️ Obituary / deceased-owner cross-check')
     owner=str(row['Owner'] or '').strip()
