@@ -86,53 +86,98 @@ def county_viewer_url(tms):
 
 @st.cache_data(ttl=86400,show_spinner=False)
 def property_cross_reference(address, tms=''):
-    """Verify house evidence from public search results.
-    This is deliberately evidence-based: beds + baths + sqft are searched for the
-    exact county address. A missing web result is NOT treated as vacant land.
+    """Cross-reference a property using direct public property pages/searches.
+    Google search is intentionally NOT used here because Streamlit Cloud/browser
+    environments frequently block or challenge automated Google requests.
     """
     addr=str(address or '').strip()
     if not addr:
         return {'status':'NO_ADDRESS','sources':{},'house_evidence':False,'mobile_evidence':False,
-                'evidence_sources':[],'mobile_sources':[]}
-    # One combined search per property is much more reliable than three separate
-    # searches and keeps verification practical for a tax-sale list.
-    q=f'"{addr}" "Anderson SC" (Zillow OR Realtor.com OR Redfin)'
+                'evidence_sources':[],'mobile_sources':[],'beds':None,'baths':None,'sqft':None,'snippet':''}
+
     ua={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36'}
-    text=''; raw=''
-    try:
-        u='https://www.google.com/search?hl=en&num=10&q='+quote_plus(q)
-        rr=requests.get(u,headers=ua,timeout=10)
-        raw=rr.text
-        text=html.unescape(re.sub(r'<[^>]+>',' ',raw))
-        text=re.sub(r'\s+',' ',text)
-    except Exception as e:
-        return {'status':'SEARCH_ERROR','sources':{'Web search':{'found':False,'error':str(e),'beds':None,'baths':None,'sqft':None,'mobile':False,'snippet':''}},'house_evidence':False,'mobile_evidence':False,'evidence_sources':[],'mobile_sources':[]}
-    low=text.lower()
-    pos=low.find(addr.lower())
-    snippet=text[max(0,pos-500):pos+5000] if pos>=0 else text[:7000]
-    slow=snippet.lower()
-    # Search-result snippets often write 3 bd, 2 ba, 1,456 sqft.
-    bed_matches=re.findall(r'(?<!\d)(\d{1,2})\s*(?:bd|beds|bedrooms?)\b',slow)
-    bath_matches=re.findall(r'(?<!\d)(\d{1,2}(?:\.5)?)\s*(?:ba|baths|bathrooms?)\b',slow)
-    sqft_matches=re.findall(r'(?<!\d)([\d,]{3,8})\s*(?:sq\.?\s*ft|sqft|square feet)\b',slow)
-    beds=int(bed_matches[0]) if bed_matches else None
-    baths=float(bath_matches[0]) if bath_matches else None
-    sqft=int(sqft_matches[0].replace(',','')) if sqft_matches else None
-    mobile=bool(re.search(r'\b(?:mobile|manufactured)(?:\s+home)?\b|mobile/manufactured',slow))
-    # Identify which target sites appeared in the returned text.
-    sources=[]
-    if 'zillow' in low: sources.append('Zillow')
-    if 'realtor.com' in low or 'realtor ' in low: sources.append('Realtor.com')
-    if 'redfin' in low: sources.append('Redfin')
-    if not sources: sources=['Web search']
-    facts=sum(v is not None for v in (beds,baths,sqft))
-    house=facts>=2
-    status='HOUSE_EVIDENCE' if house else ('MOBILE_EVIDENCE' if mobile else ('WEAK_EVIDENCE' if facts==1 else 'NO_MATCH'))
-    # Populate source rows for the UI; exact attribution is conservative.
-    per={name:{'found':house or mobile,'beds':beds,'baths':baths,'sqft':sqft,'mobile':mobile,'snippet':snippet[:1200]} for name in sources}
-    return {'status':status,'sources':per,'house_evidence':house,'mobile_evidence':mobile,
-            'evidence_sources':sources if house else [],'mobile_sources':sources if mobile else [],
-            'beds':beds,'baths':baths,'sqft':sqft,'mobile':mobile,'snippet':snippet[:1200]}
+    city='Anderson, SC'
+    targets=[
+        ('Redfin', f'https://www.redfin.com/stingray/do/query-location?location={quote_plus(addr + ", Anderson, SC")}&start=0&limit=10&v=2'),
+        ('Realtor.com', 'https://www.realtor.com/realestateandhomes-search/'+quote_plus(addr.replace(',',''))),
+        ('Zillow', 'https://www.zillow.com/homes/'+quote_plus(addr+', Anderson, SC')+'_rb/'),
+        ('CountyOffice', 'https://www.google.com/search?q='+quote_plus('site:countyoffice.org/property-record "'+addr+'" "Anderson SC"')),
+        ('Ownerly', 'https://www.google.com/search?q='+quote_plus('site:ownerly.com/sc/anderson "'+addr+'"')),
+    ]
+
+    # Parse text from whichever direct pages are reachable. We deliberately do
+    # not label a source as matched unless its returned page contains the exact
+    # street address and at least one property fact.
+    results={}
+    for name,url in targets:
+        if url.startswith('https://www.google.com/'):
+            # Search engines are only fallback links for the user; do not treat
+            # them as automated evidence.
+            continue
+        try:
+            rr=requests.get(url,headers=ua,timeout=12,allow_redirects=True)
+            if rr.status_code >= 400:
+                continue
+            raw=rr.text
+            txt=html.unescape(re.sub(r'<[^>]+>',' ',raw))
+            txt=re.sub(r'\\s+',' ',txt)
+            # JSON/HTML can contain escaped address forms; normalize for matching.
+            norm=lambda z: re.sub(r'[^a-z0-9]+',' ',str(z).lower()).strip()
+            needle=norm(addr)
+            hay=norm(txt)
+            if needle not in hay:
+                # Some sites use the address without the ZIP. Try street + city.
+                parts=re.split(r',',addr)
+                fallback=norm((parts[0] if parts else addr)+', Anderson, SC')
+                if fallback not in hay:
+                    continue
+            low=txt.lower()
+            # Look in a generous local window around the exact address.
+            pos=hay.find(needle)
+            snippet=txt[max(0,pos-500):pos+8000] if pos>=0 else txt[:8000]
+            slow=snippet.lower()
+            bed_matches=re.findall(r'(?<!\d)(\d{1,2})\s*(?:bd|beds|bedrooms?)\b',slow)
+            bath_matches=re.findall(r'(?<!\d)(\d{1,2}(?:\.5)?)\s*(?:ba|baths|bathrooms?)\b',slow)
+            sqft_matches=re.findall(r'(?<!\d)([\d,]{3,8})\s*(?:sq\.?\s*ft|sqft|square feet)\b',slow)
+            beds=int(bed_matches[0]) if bed_matches else None
+            baths=float(bath_matches[0]) if bath_matches else None
+            sqft=int(sqft_matches[0].replace(',','')) if sqft_matches else None
+            mobile=bool(re.search(r'\b(?:mobile|manufactured)(?:\s+home)?\b|mobile/manufactured',slow))
+            facts=sum(v is not None for v in (beds,baths,sqft))
+            if facts or mobile:
+                results[name]={'found':True,'beds':beds,'baths':baths,'sqft':sqft,'mobile':mobile,'facts':facts,'snippet':snippet[:1600], 'url':rr.url}
+        except Exception:
+            continue
+
+    # Evidence must come from one matching source. This prevents a bedroom
+    # count from one property and sqft from a different nearby property from
+    # accidentally being combined.
+    strong=[]; mobile_sources=[]
+    for name,v in results.items():
+        if v['facts']>=2: strong.append(name)
+        if v['mobile']: mobile_sources.append(name)
+    if strong:
+        # Prefer the strongest source and expose its actual facts.
+        best=max((results[n] for n in strong), key=lambda z:z['facts'])
+        return {'status':'HOUSE_EVIDENCE','sources':results,'house_evidence':True,
+                'mobile_evidence':bool(mobile_sources),'evidence_sources':strong,
+                'mobile_sources':mobile_sources,'beds':best['beds'],'baths':best['baths'],
+                'sqft':best['sqft'],'mobile':best['mobile'],'snippet':best['snippet']}
+    if mobile_sources:
+        best=results[mobile_sources[0]]
+        return {'status':'MOBILE_EVIDENCE','sources':results,'house_evidence':False,
+                'mobile_evidence':True,'evidence_sources':[],'mobile_sources':mobile_sources,
+                'beds':best['beds'],'baths':best['baths'],'sqft':best['sqft'],'mobile':True,
+                'snippet':best['snippet']}
+    if results:
+        best=max(results.values(), key=lambda z:z['facts'])
+        return {'status':'WEAK_EVIDENCE','sources':results,'house_evidence':False,
+                'mobile_evidence':False,'evidence_sources':[],'mobile_sources':[],
+                'beds':best['beds'],'baths':best['baths'],'sqft':best['sqft'],
+                'mobile':False,'snippet':best['snippet']}
+    return {'status':'NO_MATCH','sources':{},'house_evidence':False,'mobile_evidence':False,
+            'evidence_sources':[],'mobile_sources':[],'beds':None,'baths':None,'sqft':None,
+            'mobile':False,'snippet':'No direct public property page with matching address was reachable.'}
 
 def google_map(rows, api_key):
     """Interactive parcel map using direct TMS parcel queries.
@@ -398,7 +443,7 @@ else:
 vcol1,vcol2=st.columns([2,1])
 with vcol1:
     st.markdown('### 🔎 Online house verification')
-    st.caption('Checks the exact property address against public search results for Zillow, Realtor.com and Redfin. A house is verified only when at least two of bedrooms, bathrooms, or square footage are found. No match does NOT mean vacant land.')
+    st.caption('Checks the exact address against directly reachable public property pages. Zillow, Realtor.com and Redfin are included when their pages are reachable; CountyOffice/Ownerly are additional public-record fallbacks. Facts are only counted when they come from the same matching property page. A house is verified only when at least two of bedrooms, bathrooms, or square footage are found. No match does NOT mean vacant land.')
 with vcol2:
     verify_now=st.button(f'🔎 Verify {min(len(r),200)} properties online',use_container_width=True)
 if verify_now and len(r):
@@ -443,7 +488,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Google Maps')
-st.caption('Google Maps is optional for the regional view. Map colors are based on county/tax-sale clues. Use the property cross-reference below a selected parcel to confirm bedrooms, bathrooms, square footage, or mobile/manufactured status from Zillow, Realtor.com, or Redfin.')
+st.caption('Map colors use verified online house/mobile evidence when available. Green means no online verification was obtained; it does NOT mean vacant land. Open a point to see the verification facts and source.')
 with st.expander('🔑 Optional Google Maps demo key',expanded=False):
     st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
