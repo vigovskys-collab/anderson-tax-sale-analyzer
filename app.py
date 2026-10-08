@@ -30,7 +30,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.8')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.9')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -361,7 +361,7 @@ function makeLeaflet(){
 function makeGoogle(){
   if(!S.googleKey)return false;
   try{
-    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});
+    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy',mapId:'DEMO_MAP_ID'});
     info=new google.maps.InfoWindow();googleMode=true;
     // Android touch fallback: tapping the map near a marker selects the nearest property.
     map.addListener('click',e=>{
@@ -390,7 +390,20 @@ function distanceMeters(lat1,lng1,lat2,lng2){
 function clearMarkers(){markers.forEach(m=>googleMode?m.setMap(null):m.remove());markers=[];}
 function addMarker(x,p,c){
   const col=colorFor(x,p);
-  if(googleMode){const m=new google.maps.Marker({map,position:{lat:c.lat,lng:c.lng},title:`${x.tms} • ${category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':(category(x,p)==='land'?'Land / other':'Unknown'))}`,icon:{path:google.maps.SymbolPath.CIRCLE,scale:10,fillColor:col,fillOpacity:.98,strokeColor:'#fff',strokeWeight:2}});m.addListener('click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});markers.push(m);}
+  if(googleMode){
+    // Use Google's modern AdvancedMarkerElement so Android touch events are handled
+    // by a real DOM marker instead of the legacy canvas/SVG marker hit area.
+    const label=category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':(category(x,p)==='land'?'Land / other':'Unknown'));
+    const el=document.createElement('div');
+    el.style.width='34px'; el.style.height='34px'; el.style.borderRadius='50%';
+    el.style.background=col; el.style.border='3px solid #fff'; el.style.boxSizing='border-box';
+    el.style.boxShadow='0 2px 6px rgba(0,0,0,.35)'; el.style.cursor='pointer';
+    el.style.touchAction='manipulation'; el.style.pointerEvents='auto';
+    el.setAttribute('aria-label',`${x.tms} ${label}`); el.title=`${x.tms} • ${label}`;
+    const m=new google.maps.marker.AdvancedMarkerElement({map,position:{lat:c.lat,lng:c.lng},title:`${x.tms} • ${label}`,content:el,gmpClickable:true,zIndex:1000});
+    m.addEventListener('gmp-click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});
+    markers.push(m);
+  }
   else {const m=L.circleMarker([c.lat,c.lng],{radius:11,weight:2,color:'#fff',fillColor:col,fillOpacity:.98,interactive:true}).bindPopup(popup(x,p,c),{maxWidth:320,closeButton:true});m._taxPoint={x,p,c};m.addTo(map);markers.push(m);}
 }
 function nearestLeaflet(latlng){
@@ -420,7 +433,7 @@ async function start(){
 function loadGoogleThenStart(){
   if(!S.googleKey){start();return;}
   window.gm_authFailure=function(){start();};
-  const s=document.createElement('script');s.async=true;s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(S.googleKey);s.onload=()=>start();s.onerror=()=>start();document.head.appendChild(s);
+  const s=document.createElement('script');s.async=true;s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(S.googleKey)+'&libraries=marker';s.onload=()=>start();s.onerror=()=>start();document.head.appendChild(s);
 }
 loadGoogleThenStart();
 </script></body></html>'''
