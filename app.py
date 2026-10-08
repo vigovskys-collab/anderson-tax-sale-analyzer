@@ -29,7 +29,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.5')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.6')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -337,7 +337,7 @@ async function locate(){
   const out=[]; const seen=new Set();
   for(const f of all){
     const base=f.attributes||{}; const k=key(base.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k);
-    const ss=ssapByKey.get(k)||[]; const a=ss[0]||{};
+    const ss=ssapByKey.get(k)||[]; const a=ss.find(z=>txt(z.MH_NUM)) || ss.find(z=>/RESIDENTIAL|HOUSE|DWELLING|HOME|MOBILE/i.test(txt(z.TYPE_)+' '+txt(z.SUBTYPE_))) || ss[0] || {};
     const p=Object.assign({},base,classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{});
     x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
     out.push({x,p,c});
@@ -345,8 +345,9 @@ async function locate(){
   return out;
 }
 function makeLeaflet(){
-  map=L.map('map',{zoomControl:true,scrollWheelZoom:true}).setView([34.5034,-82.6501],10);
+  map=L.map('map',{zoomControl:true,scrollWheelZoom:true,tap:true}).setView([34.5034,-82.6501],10);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+  map.on('click',e=>{const q=nearestLeaflet(e.latlng);if(q){const m=markers.find(mm=>mm._taxPoint===q);if(m&&m.openPopup)m.openPopup();}});
 }
 function makeGoogle(){
   if(!S.googleKey)return false;
@@ -355,8 +356,14 @@ function makeGoogle(){
 function clearMarkers(){markers.forEach(m=>googleMode?m.setMap(null):m.remove());markers=[];}
 function addMarker(x,p,c){
   const col=colorFor(x,p);
-  if(googleMode){const m=new google.maps.Marker({map,position:{lat:c.lat,lng:c.lng},title:`${x.tms} • ${category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':'Land / other')}`,icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:col,fillOpacity:.95,strokeColor:'#fff',strokeWeight:1}});m.addListener('click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});markers.push(m);}
-  else {const m=L.circleMarker([c.lat,c.lng],{radius:7,weight:1,color:'#fff',fillColor:col,fillOpacity:.95}).bindPopup(popup(x,p,c));m.addTo(map);markers.push(m);}
+  if(googleMode){const m=new google.maps.Marker({map,position:{lat:c.lat,lng:c.lng},title:`${x.tms} • ${category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':(category(x,p)==='land'?'Land / other':'Unknown'))}`,icon:{path:google.maps.SymbolPath.CIRCLE,scale:10,fillColor:col,fillOpacity:.98,strokeColor:'#fff',strokeWeight:2}});m.addListener('click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});markers.push(m);}
+  else {const m=L.circleMarker([c.lat,c.lng],{radius:11,weight:2,color:'#fff',fillColor:col,fillOpacity:.98,interactive:true}).bindPopup(popup(x,p,c),{maxWidth:320,closeButton:true});m._taxPoint={x,p,c};m.addTo(map);markers.push(m);}
+}
+function nearestLeaflet(latlng){
+  if(!map||!locatedPoints.length)return null;
+  const p=map.latLngToContainerPoint(latlng); let best=null,bestD=1e9;
+  locatedPoints.forEach(q=>{const pp=map.latLngToContainerPoint([q.c.lat,q.c.lng]);const d=Math.hypot(pp.x-p.x,pp.y-p.y);if(d<bestD){bestD=d;best=q;}});
+  return bestD<=42?best:null;
 }
 function renderMarkers(){
   if(!map||!locatedPoints.length)return; clearMarkers(); const mode=document.getElementById('improvementFilter').value; const visible=[];

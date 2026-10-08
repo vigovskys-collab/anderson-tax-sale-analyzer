@@ -1,17 +1,3 @@
-# Anderson County SC Tax Sale Analyzer v10.5
+# Anderson County SC Tax Sale Analyzer v10.6
 
-This version adds a county-data property identification engine using Anderson County GIS sources in the browser:
-- Parcel fallback matching (primary + NewPropertyViewer parcel layer)
-- County E911/SSAP address data, including mobile-home number (MH_NUM)
-- Current Land Use (including Vacant)
-- Parcel zoning
-- County CLASS/IMPRV data
-- Existing online evidence when available
-
-Classification is conservative:
-- Blue = mobile/manufactured evidence
-- Red = house/structure indicated
-- Green = positive land evidence
-- Orange = unknown / needs verification
-
-Unknown is never treated as vacant land.
+Mobile interaction and county-evidence fix. Larger map tap targets, nearest-point tap fallback, and better selection of SSAP records so a parcel with a county mobile-home record is classified as mobile before generic residential evidence.
