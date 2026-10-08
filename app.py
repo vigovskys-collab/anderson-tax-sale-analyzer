@@ -12,6 +12,9 @@ GIS='https://propertyviewer.andersoncountysc.org/arcgis/rest/services'
 PARCEL_PRIMARY=f'{GIS}/Opengov/MAT/MapServer/13/query'
 PARCEL_FALLBACK=f'{GIS}/NewPropertyViewer/MapServer/5/query'
 PARCEL_CLASS=f'{GIS}/CartegraphOMS/Parcels/MapServer/0/query'
+SSAP_QUERY=f'{GIS}/QueryMap/MapServer/0/query'
+LANDUSE_QUERY=f'{GIS}/QueryMap/MapServer/7/query'
+ZONE_QUERY=f'{GIS}/QueryMap/MapServer/9/query'
 ZONING=f'{GIS}/QueryMap/MapServer/9/query'
 FLOOD=f'{GIS}/QueryMap/MapServer/18/query'
 SALES=f'{GIS}/Parcel_Sales/MapServer/0/query'
@@ -26,7 +29,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.4.1')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.5')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -200,6 +203,13 @@ def google_map(rows, api_key):
             'manual_type':(lambda v: '' if pd.isna(v) else str(v))(row.get('Manual Type')),
             'class_code':(lambda v: '' if pd.isna(v) else str(v))(row.get('CLASS')),
             'imprv':(lambda v: '' if pd.isna(v) else str(v))(row.get('IMPRV')),
+            'land_use':(lambda v: '' if pd.isna(v) else str(v))(row.get('LAND_USE')),
+            'zone1':(lambda v: '' if pd.isna(v) else str(v))(row.get('ZONE1')),
+            'ssap_type':(lambda v: '' if pd.isna(v) else str(v))(row.get('SSAP_TYPE')),
+            'ssap_subtype':(lambda v: '' if pd.isna(v) else str(v))(row.get('SSAP_SUBTYPE')),
+            'mh_num':(lambda v: '' if pd.isna(v) else str(v))(row.get('MH_NUM')),
+            'web_beds':row.get('Web Beds') if pd.notna(row.get('Web Beds')) else None,
+            'web_sqft':row.get('Web Sqft') if pd.notna(row.get('Web Sqft')) else None,
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
     parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
@@ -219,7 +229,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 <div id="map"></div><div id="status">Loading county parcel locations...</div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
-<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,classParcel:__CLASS__,googleKey:__KEY__};</script>
+<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
 const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[];
@@ -234,22 +244,41 @@ function houseClue(x){return !!x.house || /\b(HOUSE|RESIDENCE|DWELLING|HOME|SING
 function mobileClue(x){return !!x.mobile || /\b(MOBILE|MANUFACTURED|MOBILE HOME)\b/.test(String(x.address||'').toUpperCase());}
 function landClue(x){return /\b(VACANT|VACANT LAND|UNIMPROVED|LAND ONLY|LOT ONLY)\b/.test(String(x.address||'').toUpperCase());}
 function improved(p){return String(p.IMPRV??'').trim()!=='';}
-function statusLabel(p){return improved(p)?'County-improved (IMPRV '+esc(p.IMPRV)+')':'No county improvement indicator';}
+function txt(v){return String(v??'').trim();}
+function structureEvidence(x,p){
+  const s=(txt(x.ssap_type)+' '+txt(x.ssap_subtype)+' '+txt(x.ssap_site)+' '+txt(p.DESCRIPTIO)+' '+txt(x.address)).toUpperCase();
+  if(x.web_house)return {yes:true,why:'Online house/property facts'};
+  if(/\b(HOUSE|RESIDENCE|DWELLING|SINGLE FAMILY|SINGLE-FAMILY|RANCH|BRICK|FRAME|COTTAGE|CABIN)\b/.test(s))return {yes:true,why:'Tax-sale/county description indicates a dwelling'};
+  if(txt(x.ssap_type) && /RESIDENTIAL|HOUSE|DWELLING|HOME/i.test(txt(x.ssap_type)+' '+txt(x.ssap_subtype)))return {yes:true,why:'County E911 address point is residential'};
+  if(String(p.CLASS||'').toUpperCase()==='R' && improved(p))return {yes:true,why:'County residential classification + improvement'};
+  return {yes:false,why:''};
+}
+function mobileEvidence(x,p){
+  const s=(txt(x.ssap_type)+' '+txt(x.ssap_subtype)+' '+txt(x.mh_num)+' '+txt(p.DESCRIPTIO)+' '+txt(x.address)).toUpperCase();
+  if(x.web_mobile)return {yes:true,why:'Online mobile/manufactured evidence'};
+  if(txt(x.mh_num))return {yes:true,why:'County E911 mobile-home number (MH_NUM)'};
+  if(/MOBILE|MANUFACTURED|MOBILE HOME|DOUBLE WIDE|SINGLE WIDE/.test(s))return {yes:true,why:'County/tax-sale description indicates mobile/manufactured'};
+  return {yes:false,why:''};
+}
+function landEvidence(x,p){
+  const lu=txt(x.land_use).toUpperCase(); const cl=String(p.CLASS||'').toUpperCase();
+  const desc=(txt(p.DESCRIPTIO)+' '+txt(x.address)).toUpperCase();
+  if(/VACANT|UNIMPROVED|LAND ONLY|LOT ONLY/.test(desc) && !structureEvidence(x,p).yes && !mobileEvidence(x,p).yes)return {yes:true,why:'Positive vacant/unimproved description'};
+  if(lu==='VACANT' && !improved(p) && !structureEvidence(x,p).yes && !mobileEvidence(x,p).yes)return {yes:true,why:'County Current Land Use = Vacant'};
+  if(cl==='A' && !improved(p) && !structureEvidence(x,p).yes && !mobileEvidence(x,p).yes)return {yes:true,why:'County agricultural classification with no improvement'};
+  return {yes:false,why:''};
+}
 function category(x,p){
   const m=String(x.manual_type||'');
-  if(m.includes('Mobile'))return 'mobile';
-  if(m.includes('House'))return 'house';
-  if(m.includes('Land'))return 'land';
-  if(x.web_mobile||mobileClue(x))return 'mobile';
-  if(x.web_house||houseClue(x))return 'house';
-  // Residential + county improvement is a useful structure clue, but is not
-  // treated as verified. It is still displayed as a house/structure indicator.
-  if(String(p.CLASS||'').toUpperCase()==='R' && String(p.IMPRV||'').trim()!=='')return 'house';
-  if(landClue(x) || String(p.CLASS||'').toUpperCase()==='A')return 'land';
+  if(m.includes('Mobile'))return 'mobile'; if(m.includes('House'))return 'house'; if(m.includes('Land'))return 'land';
+  if(mobileEvidence(x,p).yes)return 'mobile';
+  if(structureEvidence(x,p).yes)return 'house';
+  if(landEvidence(x,p).yes)return 'land';
   return 'unknown';
 }
+function evidenceLabel(x,p){const m=String(x.manual_type||'');if(m)return m;const me=mobileEvidence(x,p);if(me.yes)return me.why;const se=structureEvidence(x,p);if(se.yes)return se.why;const le=landEvidence(x,p);if(le.yes)return le.why;return 'No sufficient evidence';}
 function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':(cat==='land'?'#2e7d32':'#f9a825'));}
-function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Verification:</b> ${x.manual_type?esc(x.manual_type):(x.web_house?'ONLINE HOUSE EVIDENCE':(x.web_mobile?'ONLINE MOBILE HOME EVIDENCE':(houseClue(x)?'Tax-sale description house clue':(improved(p)&&String(p.CLASS||'').toUpperCase()==='R'?'County residential + improvement clue':(landClue(x)?'Positive land clue':'UNKNOWN — needs verification')))))}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Verification:</b> ${esc(evidenceLabel(x,p))}<br>${x.web_beds!=null?'<b>Web beds:</b> '+esc(x.web_beds)+'<br>':''}${x.web_sqft!=null?'<b>Web sqft:</b> '+esc(x.web_sqft.toLocaleString())+'<br>':''}<b>Land use:</b> ${esc(x.land_use||'—')}<br><b>County E911:</b> ${esc((x.ssap_type||'')+' '+(x.ssap_subtype||''))||'—'}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
@@ -263,8 +292,28 @@ async function queryParcelBatch(keys){
   const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
   if(!safe.length)return [];
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
-  const u=S.parcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,IMPRV,MRKT_VALUE,PHYS_ADDR,RATIO,CPLAT')+'&returnGeometry=true&outSR=4326&geometryPrecision=6&maxAllowableOffset=0.0002&f=json';
-  const j=await jsonp(u); return j.features||[];
+  const fields='TMS,IMPRV,MRKT_VALUE,PHYS_ADDR,RATIO,CPLAT,DESCRIPTIO';
+  const urls=[
+    S.parcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&geometryPrecision=6&maxAllowableOffset=0.0002&f=json',
+    S.parcelFallback+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&geometryPrecision=6&maxAllowableOffset=0.0002&f=json'
+  ];
+  const all=[];
+  for(const u of urls){try{const j=await jsonp(u); all.push(...(j.features||[]));}catch(e){console.warn('parcel source',e);}}
+  const seen=new Set(),out=[];
+  for(const f of all){const k=key((f.attributes||{}).TMS);if(!k||seen.has(k))continue;seen.add(k);out.push(f);}
+  return out;
+}
+async function queryAuxBatch(keys){
+  const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
+  if(!safe.length)return {ssap:[],land:[],zone:[]};
+  const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
+  const q=async(base,fields)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=false&f=json';const j=await jsonp(u);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
+  const [ssap,land,zone]=await Promise.all([
+    q(S.ssap, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status'),
+    q(S.landuse, 'TMS,LAND_USE,DESCRIPTIO'),
+    q(S.zoning, 'TMS,ZONE1,ZONE2,DISTNAME')
+  ]);
+  return {ssap,land,zone};
 }
 function centroid(geom){
   if(!geom)return null;
@@ -274,16 +323,25 @@ function centroid(geom){
   return n?{lat:sy/n,lng:sx/n}:null;
 }
 async function locate(){
-  const all=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,20);
+  const all=[]; const ssapAll=[]; const landAll=[]; const zoneAll=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,20);
   for(let i=0;i<batches.length;i++){
-    document.getElementById('status').innerHTML=`Loading county parcel locations… <b>${i+1}</b> of <b>${batches.length}</b>`;
+    document.getElementById('status').innerHTML=`Loading county property evidence… <b>${i+1}</b> of <b>${batches.length}</b>`;
     try{const fs=await queryParcelBatch(batches[i]); all.push(...fs);}catch(e){console.warn(e);}
+    try{const a=await queryAuxBatch(batches[i]); ssapAll.push(...a.ssap); landAll.push(...a.land); zoneAll.push(...a.zone);}catch(e){console.warn('aux',e);}
   }
-  let classFeatures=[];
-  try{for(const b of batches){const fs=await queryClassBatch(b);classFeatures.push(...fs);}}catch(e){console.warn('CLASS lookup',e);}
+  let classFeatures=[]; try{for(const b of batches){const fs=await queryClassBatch(b);classFeatures.push(...fs);}}catch(e){console.warn('CLASS lookup',e);}
   const classByKey=new Map(classFeatures.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
+  const ssapByKey=new Map(); for(const f of ssapAll){const a=f.attributes||{}; const k=key(a.TMS); if(!k)continue; if(!ssapByKey.has(k))ssapByKey.set(k,[]); ssapByKey.get(k).push(a);}
+  const landByKey=new Map(landAll.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
+  const zoneByKey=new Map(zoneAll.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
   const out=[]; const seen=new Set();
-  for(const f of all){const p=Object.assign({},f.attributes||{},classByKey.get(key((f.attributes||{}).TMS))||{}); const k=key(p.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k); out.push({x,p,c});}
+  for(const f of all){
+    const base=f.attributes||{}; const k=key(base.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k);
+    const ss=ssapByKey.get(k)||[]; const a=ss[0]||{};
+    const p=Object.assign({},base,classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{});
+    x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
+    out.push({x,p,c});
+  }
   return out;
 }
 function makeLeaflet(){
@@ -315,7 +373,7 @@ async function start(){
     else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
     document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();
     const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
-    setTimeout(()=>{document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile`;},500);
+    setTimeout(()=>{document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
 }
 function loadGoogleThenStart(){
@@ -325,7 +383,7 @@ function loadGoogleThenStart(){
 }
 loadGoogleThenStart();
 </script></body></html>'''
-    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__CLASS__',json.dumps(class_url)).replace('__KEY__',json.dumps(str(api_key or '')))
+    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__PARCEL_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query')).replace('__CLASS__',json.dumps(class_url)).replace('__SSAP__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/0/query')).replace('__LANDUSE__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/7/query')).replace('__ZONING__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/9/query')).replace('__KEY__',json.dumps(str(api_key or '')))
     components.html(html_doc,height=680,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
@@ -529,7 +587,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Google Maps')
-st.caption('Map colors are conservative: 🔴 house/structure, 🔵 mobile/manufactured, 🟢 positive land evidence, 🟡 unknown. Unknown means we could not verify the property — it does NOT mean vacant land.')
+st.caption('Property identification engine: 🔴 house/structure indicated, 🔵 mobile/manufactured, 🟢 positive land evidence, 🟡 unknown. Evidence is based on county GIS/E911/land-use data plus online records when available. Unknown does NOT mean vacant land.')
 with st.expander('🔑 Optional Google Maps demo key',expanded=False):
     st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
