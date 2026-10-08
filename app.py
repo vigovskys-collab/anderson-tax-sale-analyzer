@@ -13,6 +13,7 @@ PARCEL_PRIMARY=f'{GIS}/Opengov/MAT/MapServer/13/query'
 PARCEL_FALLBACK=f'{GIS}/NewPropertyViewer/MapServer/5/query'
 PARCEL_CLASS=f'{GIS}/CartegraphOMS/Parcels/MapServer/0/query'
 SSAP_QUERY=f'{GIS}/QueryMap/MapServer/0/query'
+SSAP_FALLBACK=f'{GIS}/Address_Viewer/MapServer/0/query'
 LANDUSE_QUERY=f'{GIS}/QueryMap/MapServer/7/query'
 ZONE_QUERY=f'{GIS}/QueryMap/MapServer/9/query'
 ZONING=f'{GIS}/QueryMap/MapServer/9/query'
@@ -29,7 +30,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.6')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.7')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -229,7 +230,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 <div id="map"></div><div id="status">Loading county parcel locations...</div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
-<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
+<script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
 const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[];
@@ -307,9 +308,10 @@ async function queryAuxBatch(keys){
   const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
   if(!safe.length)return {ssap:[],land:[],zone:[]};
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
-  const q=async(base,fields)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=false&f=json';const j=await jsonp(u);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
-  const [ssap,land,zone]=await Promise.all([
-    q(S.ssap, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status'),
+  const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
+  let ssap=await q(S.ssap, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status', true);
+  if(!ssap.length) ssap=await q(S.ssapFallback, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status', true);
+  const [land,zone]=await Promise.all([
     q(S.landuse, 'TMS,LAND_USE,DESCRIPTIO'),
     q(S.zoning, 'TMS,ZONE1,ZONE2,DISTNAME')
   ]);
@@ -340,7 +342,13 @@ async function locate(){
     const ss=ssapByKey.get(k)||[]; const a=ss.find(z=>txt(z.MH_NUM)) || ss.find(z=>/RESIDENTIAL|HOUSE|DWELLING|HOME|MOBILE/i.test(txt(z.TYPE_)+' '+txt(z.SUBTYPE_))) || ss[0] || {};
     const p=Object.assign({},base,classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{});
     x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
-    out.push({x,p,c});
+    // If the parcel polygon query fails, use the county E911/SSAP point as a coordinate fallback.
+    let cc=c;
+    if(!cc && a.geometry){
+      const gx=Number(a.geometry.x), gy=Number(a.geometry.y);
+      if(Number.isFinite(gx)&&Number.isFinite(gy)) cc={lat:gy,lng:gx};
+    }
+    out.push({x,p,c:cc});
   }
   return out;
 }
@@ -390,7 +398,7 @@ function loadGoogleThenStart(){
 }
 loadGoogleThenStart();
 </script></body></html>'''
-    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__PARCEL_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query')).replace('__CLASS__',json.dumps(class_url)).replace('__SSAP__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/0/query')).replace('__LANDUSE__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/7/query')).replace('__ZONING__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/9/query')).replace('__KEY__',json.dumps(str(api_key or '')))
+    html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__PARCEL_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query')).replace('__CLASS__',json.dumps(class_url)).replace('__SSAP__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/0/query')).replace('__SSAP_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Address_Viewer/MapServer/0/query')).replace('__LANDUSE__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/7/query')).replace('__ZONING__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/9/query')).replace('__KEY__',json.dumps(str(api_key or '')))
     components.html(html_doc,height=680,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
