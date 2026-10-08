@@ -210,6 +210,7 @@ def google_map(rows, api_key):
             'ssap_subtype':(lambda v: '' if pd.isna(v) else str(v))(row.get('SSAP_SUBTYPE')),
             'mh_num':(lambda v: '' if pd.isna(v) else str(v))(row.get('MH_NUM')),
             'web_beds':row.get('Web Beds') if pd.notna(row.get('Web Beds')) else None,
+            'web_baths':row.get('Web Baths') if pd.notna(row.get('Web Baths')) else None,
             'web_sqft':row.get('Web Sqft') if pd.notna(row.get('Web Sqft')) else None,
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
@@ -248,6 +249,7 @@ function improved(p){return String(p.IMPRV??'').trim()!=='';}
 function txt(v){return String(v??'').trim();}
 function structureEvidence(x,p){
   const s=(txt(x.ssap_type)+' '+txt(x.ssap_subtype)+' '+txt(x.ssap_site)+' '+txt(p.DESCRIPTIO)+' '+txt(x.address)).toUpperCase();
+  // Mobile evidence is handled separately and has priority over generic residential clues.
   if(x.web_house)return {yes:true,why:'Online house/property facts'};
   if(/\b(HOUSE|RESIDENCE|DWELLING|SINGLE FAMILY|SINGLE-FAMILY|RANCH|BRICK|FRAME|COTTAGE|CABIN)\b/.test(s))return {yes:true,why:'Tax-sale/county description indicates a dwelling'};
   if(txt(x.ssap_type) && /RESIDENTIAL|HOUSE|DWELLING|HOME/i.test(txt(x.ssap_type)+' '+txt(x.ssap_subtype)))return {yes:true,why:'County E911 address point is residential'};
@@ -256,10 +258,26 @@ function structureEvidence(x,p){
 }
 function mobileEvidence(x,p){
   const s=(txt(x.ssap_type)+' '+txt(x.ssap_subtype)+' '+txt(x.mh_num)+' '+txt(p.DESCRIPTIO)+' '+txt(x.address)).toUpperCase();
+  // Strong mobile evidence always wins over generic residential evidence.
   if(x.web_mobile)return {yes:true,why:'Online mobile/manufactured evidence'};
   if(txt(x.mh_num))return {yes:true,why:'County E911 mobile-home number (MH_NUM)'};
-  if(/MOBILE|MANUFACTURED|MOBILE HOME|DOUBLE WIDE|SINGLE WIDE/.test(s))return {yes:true,why:'County/tax-sale description indicates mobile/manufactured'};
+  if(/\b(MOBILE HOME|MOBILE|MANUFACTURED|DOUBLE WIDE|SINGLE WIDE|MODULAR HOME)\b/.test(s))return {yes:true,why:'County/tax-sale description indicates mobile/manufactured'};
   return {yes:false,why:''};
+}
+function classificationConfidence(x,p){
+  const me=mobileEvidence(x,p);
+  if(me.yes){
+    if(x.web_mobile || txt(x.mh_num)) return {level:'HIGH',why:me.why};
+    return {level:'MEDIUM',why:me.why};
+  }
+  const se=structureEvidence(x,p);
+  if(se.yes){
+    if(x.web_house || /HOUSE|RESIDENCE|DWELLING|SINGLE FAMILY/i.test(txt(p.DESCRIPTIO))) return {level:'HIGH',why:se.why};
+    return {level:'MEDIUM',why:se.why};
+  }
+  const le=landEvidence(x,p);
+  if(le.yes) return {level:'MEDIUM',why:le.why};
+  return {level:'LOW',why:'No strong county or public-record evidence'};
 }
 function landEvidence(x,p){
   const lu=txt(x.land_use).toUpperCase(); const cl=String(p.CLASS||'').toUpperCase();
@@ -280,7 +298,7 @@ function category(x,p){
 function evidenceLabel(x,p){const m=String(x.manual_type||'');if(m)return m;const me=mobileEvidence(x,p);if(me.yes)return me.why;const se=structureEvidence(x,p);if(se.yes)return se.why;const le=landEvidence(x,p);if(le.yes)return le.why;return 'No sufficient evidence';}
 function statusLabel(p){const v=p?.Status ?? p?.STATUS ?? p?.status ?? p?.STATUS_LABEL ?? ''; return txt(v)||'Not available';}
 function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':(cat==='land'?'#2e7d32':'#f9a825'));}
-function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Verification:</b> ${esc(evidenceLabel(x,p))}<br>${x.web_beds!=null?'<b>Web beds:</b> '+esc(x.web_beds)+'<br>':''}${x.web_sqft!=null?'<b>Web sqft:</b> '+esc(x.web_sqft.toLocaleString())+'<br>':''}<b>Land use:</b> ${esc(x.land_use||'—')}<br><b>County E911:</b> ${esc((x.ssap_type||'')+' '+(x.ssap_subtype||''))||'—'}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const conf=classificationConfidence(x,p); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); const confText=conf.level==='HIGH'?'HIGH confidence':(conf.level==='MEDIUM'?'MEDIUM confidence':'LOW confidence'); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Confidence:</b> ${confText}<br><b>Evidence:</b> ${esc(conf.why)}<br>${x.mh_num?'<b>County MH #:</b> '+esc(x.mh_num)+'<br>':''}${x.web_beds!=null?'<b>Web beds:</b> '+esc(x.web_beds)+'<br>':''}${x.web_baths!=null?'<b>Web baths:</b> '+esc(x.web_baths)+'<br>':''}${x.web_sqft!=null?'<b>Web sqft:</b> '+esc(Number(x.web_sqft).toLocaleString())+'<br>':''}<b>Land use:</b> ${esc(x.land_use||'—')}<br><b>County E911:</b> ${esc((x.ssap_type||'')+' '+(x.ssap_subtype||''))||'—'}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
