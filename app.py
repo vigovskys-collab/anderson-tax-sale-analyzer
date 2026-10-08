@@ -30,7 +30,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.7')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.8')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -338,7 +338,7 @@ async function locate(){
   const zoneByKey=new Map(zoneAll.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
   const out=[]; const seen=new Set();
   for(const f of all){
-    const base=f.attributes||{}; const k=key(base.TMS); const x=byKey.get(k); const c=centroid(f.geometry); if(!x||!c||seen.has(k))continue; seen.add(k);
+    const base=f.attributes||{}; const k=key(base.TMS); const x=byKey.get(k); let c=centroid(f.geometry); if(!x||seen.has(k))continue;
     const ss=ssapByKey.get(k)||[]; const a=ss.find(z=>txt(z.MH_NUM)) || ss.find(z=>/RESIDENTIAL|HOUSE|DWELLING|HOME|MOBILE/i.test(txt(z.TYPE_)+' '+txt(z.SUBTYPE_))) || ss[0] || {};
     const p=Object.assign({},base,classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{});
     x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
@@ -348,6 +348,7 @@ async function locate(){
       const gx=Number(a.geometry.x), gy=Number(a.geometry.y);
       if(Number.isFinite(gx)&&Number.isFinite(gy)) cc={lat:gy,lng:gx};
     }
+    if(!cc)continue;
     out.push({x,p,c:cc});
   }
   return out;
@@ -359,7 +360,32 @@ function makeLeaflet(){
 }
 function makeGoogle(){
   if(!S.googleKey)return false;
-  try{map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});info=new google.maps.InfoWindow();googleMode=true;return true;}catch(e){return false;}
+  try{
+    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy'});
+    info=new google.maps.InfoWindow();googleMode=true;
+    // Android touch fallback: tapping the map near a marker selects the nearest property.
+    map.addListener('click',e=>{
+      if(!locatedPoints.length)return;
+      const lat=Number(e.latLng.lat()), lng=Number(e.latLng.lng());
+      let best=null,bestM=1e9;
+      locatedPoints.forEach(q=>{
+        if(!q.c)return;
+        const d=distanceMeters(lat,lng,q.c.lat,q.c.lng);
+        if(d<bestM){bestM=d;best=q;}
+      });
+      if(best && bestM<=75){
+        info.setContent(popup(best.x,best.p,best.c));
+        info.setPosition({lat:best.c.lat,lng:best.c.lng});
+        info.open(map);
+      }
+    });
+    return true;
+  }catch(e){return false;}
+}
+function distanceMeters(lat1,lng1,lat2,lng2){
+  const R=6371000, a1=lat1*Math.PI/180, a2=lat2*Math.PI/180, da=(lat2-lat1)*Math.PI/180, dl=(lng2-lng1)*Math.PI/180;
+  const h=Math.sin(da/2)**2+Math.cos(a1)*Math.cos(a2)*Math.sin(dl/2)**2;
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));
 }
 function clearMarkers(){markers.forEach(m=>googleMode?m.setMap(null):m.remove());markers=[];}
 function addMarker(x,p,c){
