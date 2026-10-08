@@ -224,16 +224,26 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 .legend{position:absolute;z-index:500;right:12px;top:12px;background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
 .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}.land{background:#2e7d32}.house{background:#c62828}.mobile{background:#1565c0}.unknown{background:#f9a825}
 #filterBox{position:absolute;z-index:500;left:12px;bottom:12px;background:white;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
+#selectBox{position:absolute;z-index:700;left:12px;right:12px;top:78px;background:white;padding:10px 12px;border-radius:12px;box-shadow:0 2px 14px #0003;font-size:14px}
+#propertySelect{width:100%;font-size:16px;padding:9px;border:1px solid #bbb;border-radius:8px;background:white;margin:5px 0 7px}
+#selectBtn{width:100%;font-size:16px;padding:10px;border:0;border-radius:8px;background:#1565c0;color:white;font-weight:700}
+#selectedDetails{margin-top:8px;padding:9px;background:#f7f7f7;border-radius:8px;max-height:230px;overflow:auto;line-height:1.35}
+#selectedDetails a{display:inline-block;margin-top:5px}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
 <div id="map"></div><div id="status">Loading county parcel locations...</div>
+<div id="selectBox"><b>Property selection</b><div style="font-size:12px;color:#555;margin-top:2px">Use this if a map dot will not open on Android.</div><select id="propertySelect"><option value="">Waiting for parcel locations...</option></select><button id="selectBtn" type="button">Show selected property</button><div id="selectedDetails"></div></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
 const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[];
+function propertyOption(q){const a=(q.p.PHYS_ADDR||q.x.address||'').trim(); const cat=category(q.x,q.p); const label=cat==='mobile'?'MOBILE':(cat==='house'?'HOUSE':(cat==='land'?'LAND':'UNKNOWN')); return `${q.x.tms||q.p.TMS||''} • ${a||'No address'} • ${label}`;}
+function setupPropertySelector(){const sel=document.getElementById('propertySelect'); sel.innerHTML=''; if(!locatedPoints.length){sel.innerHTML='<option value=>No located properties</option>'; return;} locatedPoints.forEach((q,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=propertyOption(q);sel.appendChild(o);}); if(locatedPoints.length===1)sel.value='0'; showSelectedProperty();}
+function showSelectedProperty(){const sel=document.getElementById('propertySelect'); const box=document.getElementById('selectedDetails'); const i=Number(sel.value); if(!Number.isInteger(i)||!locatedPoints[i]){box.innerHTML='';return;} const q=locatedPoints[i]; const cat=category(q.x,q.p); const addr=(q.p.PHYS_ADDR||q.x.address||'').trim(); box.innerHTML=popup(q.x,q.p,q.c); if(map){if(googleMode)map.panTo({lat:q.c.lat,lng:q.c.lng});else map.setView([q.c.lat,q.c.lng],Math.max(map.getZoom(),15));}}
+
 const byKey=new Map(S.data.map(x=>[key(x.key),x]));
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function key(x){return String(x??'').replace(/[^0-9]/g,'');}
@@ -431,6 +441,9 @@ async function start(){
     if(!ok){makeLeaflet();document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> Using a key-free map because Google Maps is not authenticated. Google Maps links remain available on every point.';}
     else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
     document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();
+    setupPropertySelector();
+    document.getElementById('selectBtn').addEventListener('click',showSelectedProperty);
+    document.getElementById('propertySelect').addEventListener('change',showSelectedProperty);
     const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
     setTimeout(()=>{document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
