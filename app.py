@@ -30,7 +30,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v10.9')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.0')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -342,12 +342,14 @@ async function locate(){
     const ss=ssapByKey.get(k)||[]; const a=ss.find(z=>txt(z.MH_NUM)) || ss.find(z=>/RESIDENTIAL|HOUSE|DWELLING|HOME|MOBILE/i.test(txt(z.TYPE_)+' '+txt(z.SUBTYPE_))) || ss[0] || {};
     const p=Object.assign({},base,classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{});
     x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
-    // If the parcel polygon query fails, use the county E911/SSAP point as a coordinate fallback.
-    let cc=c;
-    if(!cc && a.geometry){
+    // IMPORTANT: restore the original v9 map-point behavior. The county SSAP/E911
+    // point is the primary clickable location. Parcel geometry is only a fallback.
+    let cc=null;
+    if(a.geometry){
       const gx=Number(a.geometry.x), gy=Number(a.geometry.y);
       if(Number.isFinite(gx)&&Number.isFinite(gy)) cc={lat:gy,lng:gx};
     }
+    if(!cc) cc=c;
     if(!cc)continue;
     out.push({x,p,c:cc});
   }
@@ -361,7 +363,7 @@ function makeLeaflet(){
 function makeGoogle(){
   if(!S.googleKey)return false;
   try{
-    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy',mapId:'DEMO_MAP_ID'});
+    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy',clickableIcons:false});
     info=new google.maps.InfoWindow();googleMode=true;
     // Android touch fallback: tapping the map near a marker selects the nearest property.
     map.addListener('click',e=>{
@@ -391,21 +393,24 @@ function clearMarkers(){markers.forEach(m=>googleMode?m.setMap(null):m.remove())
 function addMarker(x,p,c){
   const col=colorFor(x,p);
   if(googleMode){
-    // Use Google's modern AdvancedMarkerElement so Android touch events are handled
-    // by a real DOM marker instead of the legacy canvas/SVG marker hit area.
+    // Restore the v9 marker implementation that was confirmed clickable on Android.
+    // Keep the marker deliberately simple; Google POI clicks are disabled on the map.
     const label=category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':(category(x,p)==='land'?'Land / other':'Unknown'));
-    const el=document.createElement('div');
-    el.style.width='34px'; el.style.height='34px'; el.style.borderRadius='50%';
-    el.style.background=col; el.style.border='3px solid #fff'; el.style.boxSizing='border-box';
-    el.style.boxShadow='0 2px 6px rgba(0,0,0,.35)'; el.style.cursor='pointer';
-    el.style.touchAction='manipulation'; el.style.pointerEvents='auto';
-    el.setAttribute('aria-label',`${x.tms} ${label}`); el.title=`${x.tms} • ${label}`;
-    const m=new google.maps.marker.AdvancedMarkerElement({map,position:{lat:c.lat,lng:c.lng},title:`${x.tms} • ${label}`,content:el,gmpClickable:true,zIndex:1000});
-    m.addEventListener('gmp-click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});
+    const m=new google.maps.Marker({
+      map,
+      position:{lat:c.lat,lng:c.lng},
+      title:`${x.tms} • ${label}`,
+      zIndex:10000,
+      icon:{path:google.maps.SymbolPath.CIRCLE,scale:9,fillColor:col,fillOpacity:.98,strokeColor:'#fff',strokeWeight:2}
+    });
+    m.addListener('click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});
     markers.push(m);
+  } else {
+    const m=L.circleMarker([c.lat,c.lng],{radius:11,weight:2,color:'#fff',fillColor:col,fillOpacity:.98,interactive:true}).bindPopup(popup(x,p,c),{maxWidth:320,closeButton:true});
+    m._taxPoint={x,p,c};m.addTo(map);markers.push(m);
   }
-  else {const m=L.circleMarker([c.lat,c.lng],{radius:11,weight:2,color:'#fff',fillColor:col,fillOpacity:.98,interactive:true}).bindPopup(popup(x,p,c),{maxWidth:320,closeButton:true});m._taxPoint={x,p,c};m.addTo(map);markers.push(m);}
 }
+
 function nearestLeaflet(latlng){
   if(!map||!locatedPoints.length)return null;
   const p=map.latLngToContainerPoint(latlng); let best=null,bestD=1e9;
