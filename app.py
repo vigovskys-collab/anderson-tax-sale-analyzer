@@ -26,7 +26,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.4')
+st.caption('2026 tax-sale screening • Google Maps + direct Anderson County GIS parcel links • v10.4.1')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -189,17 +189,17 @@ def google_map(rows, api_key):
         if not tms: continue
         payload.append({
             'idx':int(idx), 'tms':tms, 'key':normalized_key(tms),
-            'owner':str(row.get('Owner') or ''),
-            'address':str(row.get('Research Address') or row.get('Address') or ''),
+            'owner':(lambda v: '' if pd.isna(v) else str(v))(row.get('Owner')),
+            'address':(lambda v: '' if pd.isna(v) else str(v))(row.get('Research Address') if not pd.isna(row.get('Research Address')) else row.get('Address')),
             'bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
             'acres':None if pd.isna(row.get('Acres')) else float(row.get('Acres')),
             'mobile':bool(row.get('Mobile')),
             'house':bool(re.search(r'\b(HOUSE|RESIDENCE|DWELLING|HOME|SINGLE FAMILY|RANCH|BRICK|FRAME)\b', str(row.get('Address') or '').upper())),
             'web_house':bool(row.get('Web House Evidence',False)),
             'web_mobile':bool(row.get('Web Mobile Evidence',False)),
-            'manual_type':str(row.get('Manual Type') or ''),
-            'class_code':str(row.get('CLASS') or ''),
-            'imprv':str(row.get('IMPRV') or ''),
+            'manual_type':(lambda v: '' if pd.isna(v) else str(v))(row.get('Manual Type')),
+            'class_code':(lambda v: '' if pd.isna(v) else str(v))(row.get('CLASS')),
+            'imprv':(lambda v: '' if pd.isna(v) else str(v))(row.get('IMPRV')),
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
     parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
