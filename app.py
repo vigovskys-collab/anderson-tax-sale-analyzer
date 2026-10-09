@@ -599,10 +599,9 @@ if show_mobile or show_house or show_land:
     property_type_mask |= (~df.Mobile) & (~house_clue) & (~land_clue)
     mask &= property_type_mask
 if st.session_state.get('five_plus',False): mask &= df['Acres'].fillna(0)>=5
-r=df.loc[mask].copy()
-
-# Apply cached web verification to the filtered rows. Verification is opt-in.
-# IMPORTANT: inability to reach Zillow/Redfin/Realtor is UNKNOWN, never LAND.
+# Apply cached web verification BEFORE making the filtered copy so the embedded map
+# receives the same evidence used by the research panel. This fixes a subtle ordering bug
+# where verified mobile evidence existed in session state but never reached the map payload.
 if st.session_state.web_xref:
     df['Web House Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('house_evidence',False)))
     df['Web Mobile Evidence']=df['TMS_KEY'].map(lambda k: bool(st.session_state.web_xref.get(str(k),{}).get('mobile_evidence',False)))
@@ -611,6 +610,8 @@ if st.session_state.web_xref:
     df['Web Sqft']=df['TMS_KEY'].map(lambda k: st.session_state.web_xref.get(str(k),{}).get('sqft'))
 else:
     for cc in ['Web House Evidence','Web Mobile Evidence','Web Beds','Web Baths','Web Sqft']: df[cc]=False if 'Evidence' in cc else pd.NA
+
+r=df.loc[mask].copy()
 
 vcol1,vcol2=st.columns([2,1])
 with vcol1:
