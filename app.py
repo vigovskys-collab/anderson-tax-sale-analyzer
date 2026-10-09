@@ -30,7 +30,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.1')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.2')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -69,20 +69,27 @@ def numcol(df,c):
     if not c: return pd.Series(float('nan'),index=df.index)
     return pd.to_numeric(df[c].astype(str).str.replace(r'[$,% ,]','',regex=True),errors='coerce')
 
-def digits(x): return re.sub(r'[^0-9]','',str(x))
+def digits(x):
+    # Excel numeric cells often become strings like 1230805011.0; remove the
+    # decimal-zero suffix BEFORE stripping punctuation so it cannot shift TMS digits.
+    raw=str(x).strip()
+    if re.fullmatch(r'\d+\.0+', raw): raw=raw.split('.',1)[0]
+    return re.sub(r'[^0-9]','',raw)
 
 def canonical_tms(x):
-    d=digits(x)
-    # Excel commonly turns 0450001008 into 450001008.0.
+    raw=str(x).strip()
+    if not raw or raw.lower() in {'nan','none','nat'}: return ''
+    if re.fullmatch(r'\d+\.0+', raw): raw=raw.split('.',1)[0]
+    d=re.sub(r'[^0-9]','',raw)
+    # Anderson County parcel TMS is 10 digits. Some Excel cells drop the
+    # leading zero and arrive as nine digits, so restore that single zero.
     if len(d)==9: d=d.zfill(10)
     if len(d)==10: return f'{d[:3]}-{d[3:5]}-{d[5:7]}-{d[7:]}'
-    if len(d)==11 and '-' in str(x): return str(x)
-    if len(d)==11: return str(x)
     return ''
 
 def normalized_key(x):
     c=canonical_tms(x)
-    return digits(c) if c else digits(x)
+    return digits(c) if c else ''
 
 def county_viewer_url(tms):
     key=normalized_key(tms)
@@ -234,7 +241,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
-const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[];
+const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[],unlocatedRows=[];
 const byKey=new Map(S.data.map(x=>[key(x.key),x]));
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function key(x){return String(x??'').replace(/[^0-9]/g,'');}
@@ -400,6 +407,8 @@ async function locate(){
     x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
     out.push({x,p,c:{lat:gy,lng:gx}}); seen.add(k);
   }
+  const found=new Set(out.map(q=>key(q.x.key)));
+  unlocatedRows=S.data.filter(x=>!key(x.key)||!found.has(key(x.key)));
   return out;
 }
 function makeLeaflet(){
@@ -479,7 +488,7 @@ async function start(){
     else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
     document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();
     const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
-    setTimeout(()=>{document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale parcels located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown`;},500);
+    setTimeout(()=>{const missing=unlocatedRows.length?`<details style="margin-top:6px;text-align:left"><summary>Show ${unlocatedRows.length} properties not located</summary><div style="max-height:180px;overflow:auto;font-size:12px">${unlocatedRows.map(x=>`<div style="padding:3px;border-bottom:1px solid #ddd"><b>${esc(x.tms||'TMS missing')}</b> — ${esc(x.address||'No description/address')} — ${esc(x.owner||'Owner not listed')}</div>`).join('')}</div></details>`:'<div>All listed TMS keys were located.</div>';document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale rows located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown${missing}`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
 }
 function loadGoogleThenStart(){
@@ -565,10 +574,19 @@ df['Mobile']=(df.Type+' '+df.Address).str.lower().str.contains(r'mobile|manufact
 
 with st.expander('🔎 GIS diagnostics',expanded=True):
     st.write(f'Tax-sale rows loaded: **{len(df):,}**')
-    st.write(f'Rows with canonical TMS: **{df.TMS_CANONICAL.ne("").sum():,}**')
-    examples=df.loc[df.TMS_CANONICAL.ne(''),'TMS_CANONICAL'].head(3).tolist()
+    valid=df.TMS_CANONICAL.ne('')
+    st.write(f'Rows with valid 10-digit TMS: **{valid.sum():,}**')
+    st.write(f'Distinct valid TMS values: **{df.loc[valid, "TMS_KEY"].nunique():,}**')
+    st.write(f'Duplicate TMS rows beyond the first: **{int(valid.sum()-df.loc[valid, "TMS_KEY"].nunique()):,}**')
+    st.write(f'Rows with missing/invalid TMS: **{int((~valid).sum()):,}**')
+    examples=df.loc[valid,'TMS_CANONICAL'].head(3).tolist()
     st.write('Example canonical TMS: **'+(', '.join(examples) if examples else 'none')+'**')
-    st.success('Spreadsheet/TMS parsing is working. County parcel research now opens directly in the official viewer using the property TMS; no manual disclaimer click is required.')
+    if valid.sum() == 0:
+        st.error('No valid TMS values were detected. Check that the official spreadsheet was loaded and that its TMS column was recognized.')
+    elif df.loc[valid, 'TMS_KEY'].nunique() < valid.sum():
+        st.warning('Some spreadsheet rows share a TMS. The map counts unique parcels, while the table above counts every tax-sale row.')
+    else:
+        st.success('TMS values have been normalized for text and Excel numeric formats. The map status will show which properties the county GIS could not locate.')
 
 # GIS values are intentionally browser-side in v8. Keep columns so the ranking/filter UI remains stable.
 for c in ['GIS Address','GIS Market','GIS Acres','GIS Ratio','IMPRV','County Status','_lat','_lon','_geom','_source']:
