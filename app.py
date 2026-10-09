@@ -352,7 +352,7 @@ async function locate(){
   }
   let classFeatures=[]; try{for(const b of batches){const fs=await queryClassBatch(b);classFeatures.push(...fs);}}catch(e){console.warn('CLASS lookup',e);}
   const classByKey=new Map(classFeatures.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
-  const ssapByKey=new Map(); for(const f of ssapAll){const a=f.attributes||{}; const k=key(a.TMS); if(!k)continue; if(!ssapByKey.has(k))ssapByKey.set(k,[]); ssapByKey.get(k).push(a);}
+  const ssapByKey=new Map(); for(const f of ssapAll){const a=Object.assign({},f.attributes||{},{__geometry:f.geometry||null}); const k=key(a.TMS); if(!k)continue; if(!ssapByKey.has(k))ssapByKey.set(k,[]); ssapByKey.get(k).push(a);}
   const landByKey=new Map(landAll.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
   const zoneByKey=new Map(zoneAll.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
   const out=[]; const seen=new Set();
@@ -364,13 +364,27 @@ async function locate(){
     // IMPORTANT: restore the original v9 map-point behavior. The county SSAP/E911
     // point is the primary clickable location. Parcel geometry is only a fallback.
     let cc=null;
-    if(a.geometry){
-      const gx=Number(a.geometry.x), gy=Number(a.geometry.y);
+    if(a.__geometry){
+      const gx=Number(a.__geometry.x), gy=Number(a.__geometry.y);
       if(Number.isFinite(gx)&&Number.isFinite(gy)) cc={lat:gy,lng:gx};
     }
     if(!cc) cc=c;
     if(!cc)continue;
     out.push({x,p,c:cc});
+  }
+  // Fallback: some tax-sale TMS numbers are absent from the parcel polygon query,
+  // but still have a county E911/SSAP address point. Add those as map points too.
+  // This is the key step that prevents the map count being limited to polygon matches.
+  for(const [k,ss] of ssapByKey.entries()){
+    if(seen.has(k))continue;
+    const x=byKey.get(k); if(!x)continue;
+    const a=ss.find(z=>z.__geometry && Number.isFinite(Number(z.__geometry.x)) && Number.isFinite(Number(z.__geometry.y))) || ss.find(z=>txt(z.MH_NUM)) || ss[0];
+    if(!a || !a.__geometry)continue;
+    const gx=Number(a.__geometry.x), gy=Number(a.__geometry.y);
+    if(!Number.isFinite(gx)||!Number.isFinite(gy)||Math.abs(gx)>180||Math.abs(gy)>90)continue;
+    const p=Object.assign({},classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{}, {TMS:k,PHYS_ADDR:a.FullAddress||a.SITE||''});
+    x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
+    out.push({x,p,c:{lat:gy,lng:gx}}); seen.add(k);
   }
   return out;
 }
