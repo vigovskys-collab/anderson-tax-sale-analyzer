@@ -328,8 +328,22 @@ async function queryAuxBatch(keys){
   if(!safe.length)return {ssap:[],land:[],zone:[]};
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
   const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
-  let ssap=await q(S.ssap, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status', true);
-  if(!ssap.length) ssap=await q(S.ssapFallback, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status', true);
+  // Query BOTH county E911/SSAP layers for every batch. The primary layer can
+  // return some matches while omitting other TMS values, so using the fallback
+  // only when the entire primary response is empty silently loses properties.
+  const [ssapPrimary,ssapSecondary]=await Promise.all([
+    q(S.ssap, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status', true),
+    q(S.ssapFallback, 'TMS,FullAddress,TYPE_,SUBTYPE_,MH_NUM,SITE,Status', true)
+  ]);
+  const ssap=[]; const ssapSeen=new Set();
+  for(const f of [...ssapPrimary,...ssapSecondary]){
+    const a=f.attributes||{}; const k=key(a.TMS);
+    // Keep multiple records per parcel when they have different address/mobile
+    // details, but suppress exact repeated TMS+point+mobile-number rows.
+    const g=f.geometry||{};
+    const sig=[k,a.FullAddress||'',a.TYPE_||'',a.SUBTYPE_||'',a.MH_NUM||'',g.x??'',g.y??''].join('|');
+    if(!k||ssapSeen.has(sig))continue; ssapSeen.add(sig); ssap.push(f);
+  }
   const [land,zone]=await Promise.all([
     q(S.landuse, 'TMS,LAND_USE,DESCRIPTIO'),
     q(S.zoning, 'TMS,ZONE1,ZONE2,DISTNAME')
