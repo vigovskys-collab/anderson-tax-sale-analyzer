@@ -30,7 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.3')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.4')
+st.info('v11.4 matching improvement: county parcel and E911 searches now try both 10-digit TMS values and the 9-digit form used when Excel/GIS drops a leading zero. Matches are normalized before map points are counted.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -244,7 +245,8 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[],unlocatedRows=[];
 const byKey=new Map(S.data.map(x=>[key(x.key),x]));
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function key(x){return String(x??'').replace(/[^0-9]/g,'');}
+function key(x){let d=String(x??'').replace(/[^0-9]/g,''); if(d.length===10 && d[0]==='0') d=d.slice(1); return d;}
+function tmsVariants(keys){const out=new Set(); keys.forEach(v=>{const d=String(v??'').replace(/[^0-9]/g,''); if(!d)return; out.add(d); if(d.length===10 && d[0]==='0')out.add(d.slice(1)); else if(d.length===9)out.add('0'+d);}); return [...out];}
 function countyUrl(tms){return 'https://propertyviewer.andersoncountysc.org/mapsjs/?TMS='+encodeURIComponent(key(tms))+'&disclaimer=false';}
 function googleUrl(x,c){return c?('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(c.lat+','+c.lng)):('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((x.address||'')+', Anderson County, SC'));}
 function streetUrl(x,c){return c?('https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+encodeURIComponent(c.lat+','+c.lng)+'&heading=0&pitch=0&fov=90'):('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((x.address||'')+', Anderson County, SC'));}
@@ -309,14 +311,14 @@ function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mo
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
-  const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
+  const safe=tmsVariants(keys);
   if(!safe.length)return [];
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
   const u=S.classParcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,CLASS,IMPRV,RATIO')+'&returnGeometry=false&f=json';
   const j=await jsonp(u); return j.features||[];
 }
 async function queryParcelBatch(keys){
-  const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
+  const safe=tmsVariants(keys);
   if(!safe.length)return [];
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
   const fields='TMS,IMPRV,MRKT_VALUE,PHYS_ADDR,RATIO,CPLAT,DESCRIPTIO';
@@ -331,7 +333,7 @@ async function queryParcelBatch(keys){
   return out;
 }
 async function queryAuxBatch(keys){
-  const safe=keys.map(k=>String(k).replace(/[^0-9]/g,'')).filter(Boolean);
+  const safe=tmsVariants(keys);
   if(!safe.length)return {ssap:[],land:[],zone:[]};
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
   const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
