@@ -30,7 +30,7 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.0')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.1')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -370,7 +370,7 @@ async function locate(){
     }
     if(!cc) cc=c;
     if(!cc)continue;
-    out.push({x,p,c:cc});
+    out.push({x,p,c:cc}); seen.add(k);
   }
   // Fallback: some tax-sale TMS numbers are absent from the parcel polygon query,
   // but still have a county E911/SSAP address point. Add those as map points too.
