@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.4')
-st.info('v11.4 matching improvement: county parcel and E911 searches now try both 10-digit TMS values and the 9-digit form used when Excel/GIS drops a leading zero. Matches are normalized before map points are counted.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.5')
+st.info('v11.5 matching improvement: county parcel and E911 searches now try both 10-digit TMS values and the 9-digit form used when Excel/GIS drops a leading zero. Matches are normalized before map points are counted.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -665,10 +665,11 @@ vcol1,vcol2=st.columns([2,1])
 with vcol1:
     st.markdown('### 🔎 Online house verification')
     st.caption('Attempts direct public property pages. If a site blocks the server, the result is UNKNOWN. A failed lookup is never treated as vacant land. Strong house evidence requires at least two of bedrooms, bathrooms, or square footage from the same matching page; mobile/manufactured wording is separately flagged.')
+    st.info(f'The current filters include {len(r)} properties. This version can verify the full list, not just the first 200; a larger batch may take several minutes.')
 with vcol2:
-    verify_now=st.button(f'🔎 Verify {min(len(r),200)} properties online',use_container_width=True)
+    verify_now=st.button(f'🔎 Verify all {len(r)} properties online',use_container_width=True, help='Checks every property matching the current filters. Larger lists take longer.')
 if verify_now and len(r):
-    todo=r.head(200)
+    todo=r.copy()
     progress=st.progress(0)
     status=st.empty()
     for n,(idx,row) in enumerate(todo.iterrows(),1):
@@ -719,7 +720,7 @@ with st.expander('🔑 Optional Google Maps demo key',expanded=False):
     st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
     google_maps_key=st.text_input('Google Maps demo key (optional)',type='password',placeholder='AIza…',help='Used only in this current Streamlit session.')
-if len(r): google_map(r.head(200),google_maps_key)
+if len(r): google_map(r.head(500),google_maps_key)
 
 st.subheader('🏆 Top opportunities')
 if len(r)==0: st.warning('No properties match the current filters.')
