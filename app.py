@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.6')
-st.info('v11.6 adds a cautious text-based county parcel fallback for properties missed by direct TMS lookup. It checks owner and road-description clues and only adds a fallback point when both agree.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.7')
+st.info('v11.7 adds map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -200,7 +200,18 @@ def google_map(rows, api_key):
         tms=str(row.get('TMS_CANONICAL') or '').strip()
         if not tms: continue
         payload.append({
-            'idx':int(idx), 'tms':tms, 'key':normalized_key(tms),
+            'idx':int(idx), 'item':(lambda v: '' if pd.isna(v) else str(v).strip())(row.get('Item')),
+            'map_no':int(idx)+1, 'tms':tms, 'key':normalized_key(tms),
+            'city':(lambda v: '' if pd.isna(v) else str(v))(row.get('City')),
+            'tax_year':(lambda v: '' if pd.isna(v) else str(v))(row.get('Tax Year')),
+            'sale_type':(lambda v: '' if pd.isna(v) else str(v))(row.get('Type')),
+            'opening_bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
+            'assessed':None if pd.isna(row.get('Assessed')) else float(row.get('Assessed')),
+            'gis_market':None if pd.isna(row.get('GIS Market')) else float(row.get('GIS Market')),
+            'research_address':(lambda v: '' if pd.isna(v) else str(v))(row.get('Research Address')),
+            'beds':row.get('Web Beds') if pd.notna(row.get('Web Beds')) else None,
+            'baths':row.get('Web Baths') if pd.notna(row.get('Web Baths')) else None,
+            'sqft':row.get('Web Sqft') if pd.notna(row.get('Web Sqft')) else None,
             'owner':(lambda v: '' if pd.isna(v) else str(v))(row.get('Owner')),
             'address':(lambda v: '' if pd.isna(v) else str(v))(row.get('Research Address') if not pd.isna(row.get('Research Address')) else row.get('Address')),
             'bid':None if pd.isna(row.get('Opening Bid')) else float(row.get('Opening Bid')),
@@ -232,11 +243,11 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 #status{position:absolute;z-index:500;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:84%}
 .legend{position:absolute;z-index:500;right:12px;top:12px;background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
 .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}.land{background:#2e7d32}.house{background:#c62828}.mobile{background:#1565c0}.unknown{background:#f9a825}
-#filterBox{position:absolute;z-index:500;left:12px;bottom:12px;background:white;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
+#filterBox{position:absolute;z-index:500;left:12px;bottom:12px;background:white;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}.map-number{background:#16803b;color:#fff;border:2px solid #fff;border-radius:50%;font-weight:800;text-align:center;min-width:22px;line-height:22px;box-shadow:0 1px 4px #0006}.decision{display:inline-block;padding:8px 14px;margin:6px 6px 4px 0;border-radius:7px;border:0;font-size:15px;font-weight:700;cursor:pointer}.yesbtn{background:#16803b;color:white}.nobtn{background:#111;color:white}.interest-tools{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.interest-tools button{font-size:13px;padding:7px 9px;border:1px solid #aaa;border-radius:6px;background:#f4f4f4;color:#222}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Loading county parcel locations...</div>
+<div id="map"></div><div id="status">Loading county parcel locations...</div><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -306,8 +317,16 @@ function category(x,p){
 }
 function evidenceLabel(x,p){const m=String(x.manual_type||'');if(m)return m;const me=mobileEvidence(x,p);if(me.yes)return me.why;const se=structureEvidence(x,p);if(se.yes)return se.why;const le=landEvidence(x,p);if(le.yes)return le.why;return 'No sufficient evidence';}
 function statusLabel(p){const v=p?.Status ?? p?.STATUS ?? p?.status ?? p?.STATUS_LABEL ?? ''; return txt(v)||'Not available';}
-function colorFor(x,p){const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':(cat==='land'?'#2e7d32':'#f9a825'));}
-function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const conf=classificationConfidence(x,p); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); const confText=conf.level==='HIGH'?'HIGH confidence':(conf.level==='MEDIUM'?'MEDIUM confidence':'LOW confidence'); return `<div style="min-width:260px"><b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Confidence:</b> ${confText}<br><b>Evidence:</b> ${esc(conf.why)}<br>${x.mh_num?'<b>County MH #:</b> '+esc(x.mh_num)+'<br>':''}${x.web_beds!=null?'<b>Web beds:</b> '+esc(x.web_beds)+'<br>':''}${x.web_baths!=null?'<b>Web baths:</b> '+esc(x.web_baths)+'<br>':''}${x.web_sqft!=null?'<b>Web sqft:</b> '+esc(Number(x.web_sqft).toLocaleString())+'<br>':''}<b>Land use:</b> ${esc(x.land_use||'—')}<br><b>County E911:</b> ${esc((x.ssap_type||'')+' '+(x.ssap_subtype||''))||'—'}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function getDecisions(){try{return JSON.parse(localStorage.getItem('andersonTaxSaleDecisionsV117')||'{}')}catch(e){return {}}}
+let decisions=getDecisions();
+function setDecision(x,val){decisions[String(x.key||x.tms)]=val;try{localStorage.setItem('andersonTaxSaleDecisionsV117',JSON.stringify(decisions))}catch(e){};renderMarkers();renderInterestedPanel();}
+function decisionFor(x){return decisions[String(x.key||x.tms)]||''}
+function colorFor(x,p){const d=decisionFor(x);if(d==='yes')return '#16803b';if(d==='no')return '#111111';const cat=category(x,p); return cat==='mobile'?'#1565c0':(cat==='house'?'#c62828':(cat==='land'?'#2e7d32':'#f9a825'));}
+function popup(x,p,c){const cat=category(x,p); const catLabel=cat==='mobile'?'Mobile home':(cat==='house'?'House / structure indicated':(cat==='land'?'Land evidence':'Unknown / needs verification')); const conf=classificationConfidence(x,p); const addr=(p.PHYS_ADDR||x.address||'').trim(); const xx=Object.assign({},x,{address:addr}); const confText=conf.level==='HIGH'?'HIGH confidence':(conf.level==='MEDIUM'?'MEDIUM confidence':'LOW confidence'); const d=decisionFor(x); return `<div style="min-width:260px;max-width:310px"><b>Map #${esc(x.map_no)}</b> · <b>${esc(x.tms||p.TMS||'')}</b><br><b>${esc(x.owner||'')}</b><br>${esc(addr||'No county physical address')}<hr style="border:0;border-top:1px solid #ddd"><b>Interested?</b><br><button class="decision yesbtn" data-choice="yes" data-key="${esc(x.key)}">Yes</button><button class="decision nobtn" data-choice="no" data-key="${esc(x.key)}">No</button><div>${d==='yes'?'✅ In Interested list':(d==='no'?'⛔ Marked No; excluded from Interested list':'Not decided yet')}</div><hr style="border:0;border-top:1px solid #ddd"><b>Property type:</b> ${catLabel}<br><b>Confidence:</b> ${confText}<br><b>Evidence:</b> ${esc(conf.why)}<br>${x.mh_num?'<b>County MH #:</b> '+esc(x.mh_num)+'<br>':''}${x.web_beds!=null?'<b>Bedrooms:</b> '+esc(x.web_beds)+'<br>':''}${x.web_baths!=null?'<b>Bathrooms:</b> '+esc(x.web_baths)+'<br>':''}${x.web_sqft!=null?'<b>Sqft:</b> '+esc(Number(x.web_sqft).toLocaleString())+'<br>':''}<b>Land use:</b> ${esc(x.land_use||'—')}<br><b>County E911:</b> ${esc((x.ssap_type||'')+' '+(x.ssap_subtype||''))||'—'}<br><b>County status:</b> ${statusLabel(p)}<br><b>Opening bid:</b> ${x.bid==null?'—':'$'+Number(x.bid).toLocaleString()}<br><b>Acres:</b> ${x.acres==null?'—':Number(x.acres).toFixed(2)}<br><br><a target="_blank" href="${googleUrl(xx,c)}">🗺️ Google Maps exact point</a><br><a target="_blank" href="${streetUrl(xx,c)}">📍 Street View exact point</a><br><a target="_blank" href="${externalSearch('zillow.com/homedetails',xx)}">🏠 Check Zillow</a><br><a target="_blank" href="${externalSearch('realtor.com/realestateandhomes',xx)}">🏠 Check Realtor.com</a><br><a target="_blank" href="${countyUrl(x.tms||p.TMS)}">🏛️ Anderson County parcel</a></div>`;}
+function csvEscape(v){let s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
+function downloadCSV(rows,filename){const cols=['Interested','County Item #','Map #','TMS','Owner','Property Description / Address','City','Acres','Bedrooms','Bathrooms','Square Feet','Starting Bid','Assessed Value','GIS Market Value','Tax Year','Property Type','Land Use','Zoning','E911 Type','E911 Subtype','County Mobile Home #','Latitude','Longitude','County Parcel URL','Google Maps URL','Street View URL'];const lines=[cols.map(csvEscape).join(',')];rows.forEach(q=>{const x=q.x,p=q.p,c=q.c,d=decisionFor(x);const vals=[d==='yes'?'Yes':(d==='no'?'No':'Undecided'),x.item,x.map_no,x.tms,x.owner,x.research_address||p.PHYS_ADDR||x.address,x.city,x.acres,x.beds,x.baths,x.sqft,x.opening_bid??x.bid,x.assessed,x.gis_market,x.tax_year,x.sale_type,x.land_use,x.zone1,x.ssap_type,x.ssap_subtype,x.mh_num,c.lat,c.lng,countyUrl(x.tms),googleUrl(Object.assign({},x,{address:x.research_address||x.address}),c),streetUrl(Object.assign({},x,{address:x.research_address||x.address}),c)];lines.push(vals.map(csvEscape).join(','));});const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+function renderInterestedPanel(){const host=document.getElementById('interestPanel');if(!host)return;const yes=locatedPoints.filter(q=>decisionFor(q.x)==='yes');const no=locatedPoints.filter(q=>decisionFor(q.x)==='no');host.innerHTML=`<div style="font-weight:700">Interested: ${yes.length} · No: ${no.length} · Not reviewed: ${Math.max(0,locatedPoints.length-yes.length-no.length)}</div><div class="interest-tools"><button id="downloadInterested">⬇ Download Interested CSV</button><button id="downloadAll">⬇ Download all properties CSV</button></div><div style="max-height:130px;overflow:auto;margin-top:6px;border-top:1px solid #ddd;padding-top:5px"><b>Interested properties</b>${yes.length?yes.map(q=>`<div style="padding:3px 0;border-bottom:1px solid #eee"><b>County #${esc(q.x.item||'—')} · Map ${esc(q.x.map_no)}</b> — ${esc(q.x.tms)}<br>${esc(q.x.owner||'Owner unknown')} · ${esc(q.x.research_address||q.x.address||'No address')}</div>`).join(''):'<div>No properties marked Yes yet. Tap a map dot to review it.</div>'}</div><div style="font-size:12px;margin-top:5px">Choices are saved in this browser when storage is available. Download the spreadsheet regularly as a backup.</div>`;document.getElementById('downloadInterested').onclick=()=>downloadCSV(yes,'anderson_interested_properties.csv');document.getElementById('downloadAll').onclick=()=>downloadCSV(locatedPoints,'anderson_all_reviewed_properties.csv');}
+document.addEventListener('click',e=>{const b=e.target.closest('button[data-choice]');if(!b)return;const k=b.getAttribute('data-key'),val=b.getAttribute('data-choice');const x=S.data.find(z=>String(z.key)===String(k));if(x)setDecision(x,val);});
 function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
@@ -492,18 +511,22 @@ function addMarker(x,p,c){
   if(googleMode){
     // Restore the v9 marker implementation that was confirmed clickable on Android.
     // Keep the marker deliberately simple; Google POI clicks are disabled on the map.
-    const label=category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':(category(x,p)==='land'?'Land / other':'Unknown'));
+    const d=decisionFor(x); const label=d==='yes'?String(x.map_no):'';
+    const categoryLabel=category(x,p)==='mobile'?'Mobile home':(category(x,p)==='house'?'House indicated':(category(x,p)==='land'?'Land / other':'Unknown'));
     const m=new google.maps.Marker({
       map,
       position:{lat:c.lat,lng:c.lng},
-      title:`${x.tms} • ${label}`,
+      title:`Map #${x.map_no} • ${x.tms} • ${d==='yes'?'Interested':(d==='no'?'No':categoryLabel)}`,
       zIndex:10000,
-      icon:{path:google.maps.SymbolPath.CIRCLE,scale:9,fillColor:col,fillOpacity:.98,strokeColor:'#fff',strokeWeight:2}
+      label:label?{text:label,color:'#fff',fontSize:'12px',fontWeight:'bold'}:undefined,
+      icon:{path:google.maps.SymbolPath.CIRCLE,scale: d==='yes'?12:9,fillColor:col,fillOpacity:.98,strokeColor:'#fff',strokeWeight:2}
     });
     m.addListener('click',()=>{info.setContent(popup(x,p,c));info.open({map,anchor:m});});
     markers.push(m);
   } else {
-    const m=L.circleMarker([c.lat,c.lng],{radius:11,weight:2,color:'#fff',fillColor:col,fillOpacity:.98,interactive:true}).bindPopup(popup(x,p,c),{maxWidth:320,closeButton:true});
+    const d=decisionFor(x);
+    const m=L.circleMarker([c.lat,c.lng],{radius:d==='yes'?14:11,weight:2,color:'#fff',fillColor:col,fillOpacity:.98,interactive:true}).bindPopup(popup(x,p,c),{maxWidth:320,closeButton:true});
+    if(d==='yes')m.bindTooltip(String(x.map_no),{permanent:true,direction:'center',className:'map-number',opacity:1});
     m._taxPoint={x,p,c};m.addTo(map);markers.push(m);
   }
 }
@@ -527,7 +550,7 @@ async function start(){
     const ok=makeGoogle();
     if(!ok){makeLeaflet();document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> Using a key-free map because Google Maps is not authenticated. Google Maps links remain available on every point.';}
     else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
-    document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();
+    document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();renderInterestedPanel();
     const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
     setTimeout(()=>{const missing=unlocatedRows.length?`<details open style="margin-top:8px;text-align:left"><summary style="cursor:pointer;padding:8px 4px;font-size:14px;font-weight:bold">Show ${unlocatedRows.length} properties not located (tap a link below)</summary><div style="max-height:42vh;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:13px;background:#fff;color:#222;border:1px solid #bbb;border-radius:6px;padding:5px">${unlocatedRows.map(x=>{const t=String(x.tms||'').replace(/[^0-9]/g,'');const county=t?`https://propertyviewer.andersoncountysc.org/mapsjs/?TMS=${encodeURIComponent(t)}&disclaimer=false`:'https://propertyviewer.andersoncountysc.org/mapsjs/';const q=encodeURIComponent([x.tms,x.address,x.owner,'Anderson SC'].filter(Boolean).join(' '));return `<div style="padding:8px 4px;border-bottom:1px solid #ddd;overflow-wrap:anywhere"><b>${esc(x.tms||'TMS missing')}</b><br>${esc(x.address||'No description/address')}<br>${esc(x.owner||'Owner not listed')}<br><a style="display:inline-block;padding:6px 8px;margin:4px 4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="${county}">Open county parcel</a><a style="display:inline-block;padding:6px 8px;margin:4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="https://www.google.com/search?q=${q}">Search property</a></div>`}).join('')}</div></details>`:'<div>All listed TMS keys were located.</div>';document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale rows located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown${missing}`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
@@ -754,7 +777,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Google Maps')
-st.caption('Property identification engine: 🔴 house/structure indicated, 🔵 mobile/manufactured, 🟢 positive land evidence, 🟡 unknown. Evidence is based on county GIS/E911/land-use data plus online records when available. Unknown does NOT mean vacant land.')
+st.caption('Tap a property dot and choose Interested? Yes or No. Yes turns the dot green and adds a numbered marker to the Interested list; No turns it black and excludes it from the Interested list. Download your spreadsheet from the panel on the map. Map numbers correspond to the second spreadsheet column; the county Item number stays first.')
 with st.expander('🔑 Optional Google Maps demo key',expanded=False):
     st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
