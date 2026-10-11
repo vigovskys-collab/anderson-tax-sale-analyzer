@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.5')
-st.info('v11.5 matching improvement: county parcel and E911 searches now try both 10-digit TMS values and the 9-digit form used when Excel/GIS drops a leading zero. Matches are normalized before map points are counted.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.6')
+st.info('v11.6 adds a cautious text-based county parcel fallback for properties missed by direct TMS lookup. It checks owner and road-description clues and only adds a fallback point when both agree.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -408,6 +408,45 @@ async function locate(){
     const p=Object.assign({},classByKey.get(k)||{},landByKey.get(k)||{},zoneByKey.get(k)||{}, {TMS:k,PHYS_ADDR:a.FullAddress||a.SITE||''});
     x.ssap_type=a.TYPE_||''; x.ssap_subtype=a.SUBTYPE_||''; x.mh_num=a.MH_NUM||''; x.ssap_site=a.SITE||''; x.land_use=p.LAND_USE||''; x.zone1=p.ZONE1||'';
     out.push({x,p,c:{lat:gy,lng:gx}}); seen.add(k);
+  }
+  // Second-chance recovery for parcels missed by exact TMS lookups.
+  // Search county parcel attributes using owner and road-description clues,
+  // then accept a point only when the candidate agrees with BOTH owner and road.
+  const already=new Set(out.map(q=>key(q.x.key)));
+  function words(v){return String(v||'').toUpperCase().replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(w=>w.length>=3 && !['THE','AND','LLC','INC','LTD','TR','RD','ROAD','ST','STREET','HWY','HIGHWAY','AC','LOT','TRACT'].includes(w));}
+  function overlap(a,b){const aa=new Set(words(a));return words(b).filter(w=>aa.has(w)).length;}
+  async function textParcelCandidates(x){
+    const addr=String(x.address||''); const owner=String(x.owner||'');
+    const roadTokens=words(addr).filter(w=>!/^\d+(\.\d+)?$/.test(w));
+    const ownerTokens=words(owner);
+    if(!ownerTokens.length || !roadTokens.length) return [];
+    const ownerTerm=ownerTokens[0];
+    const roadTerm=roadTokens[0];
+    const safe=v=>String(v).replace(/'/g,"''");
+    const where=`(TAXOWNSTR LIKE '%${safe(ownerTerm)}%' OR DESCRIPTIO LIKE '%${safe(roadTerm)}%' OR PHYS_ADDR LIKE '%${safe(roadTerm)}%')`;
+    const fields='TMS,TAXOWNSTR,PHYS_ADDR,DESCRIPTIO,ACRES,ACREAGE,IMPRV,MRKT_VALUE';
+    const bases=[S.parcel,S.parcelFallback]; const candidates=[];
+    for(const base of bases){
+      try{
+        const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&resultRecordCount=100&f=json';
+        const j=await jsonp(u,18000); candidates.push(...(j.features||[]));
+      }catch(e){console.warn('text parcel fallback',e);}
+    }
+    const ranked=candidates.map(f=>{const a=f.attributes||{};const own=overlap(owner,a.TAXOWNSTR||'');const road=Math.max(overlap(addr,a.DESCRIPTIO||''),overlap(addr,a.PHYS_ADDR||''));const geom=centroid(f.geometry);let score=own*3+road*2;const acre=Number(a.ACRES??a.ACREAGE);if(Number.isFinite(acre)&&acre>0&&Number(x.acres)>0){const diff=Math.abs(acre-Number(x.acres))/Number(x.acres);if(diff<=0.2)score+=2;else if(diff>0.6)score-=2;}return {f,a,own,road,geom,score};}).filter(z=>z.geom&&z.own>=1&&z.road>=1).sort((a,b)=>b.score-a.score);
+    if(!ranked.length)return [];
+    // Require a clear winner to avoid assigning a neighboring/related parcel.
+    if(ranked.length>1 && ranked[0].score-ranked[1].score<2)return [];
+    return ranked.slice(0,1);
+  }
+  for(const x of S.data){
+    const k=key(x.key); if(!k||already.has(k))continue;
+    try{
+      const candidates=await textParcelCandidates(x);
+      if(!candidates.length)continue;
+      const z=candidates[0],a=z.a,c=z.geom;
+      const p=Object.assign({},a,{TMS:a.TMS||x.tms,PHYS_ADDR:a.PHYS_ADDR||a.DESCRIPTIO||x.address,__match_method:'owner + road description fallback'});
+      out.push({x,p,c}); already.add(k);
+    }catch(e){console.warn('fallback match failed',x.tms,e);}
   }
   const found=new Set(out.map(q=>key(q.x.key)));
   unlocatedRows=S.data.filter(x=>!key(x.key)||!found.has(key(x.key)));
