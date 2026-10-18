@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.9')
-st.info('v11.9 adds map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v12.0')
+st.info('v12.0 fixes blank-map startup by loading a key-free map first and keeps map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -575,9 +575,11 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    const ok=makeGoogle();
-    if(!ok){makeLeaflet();document.getElementById('status').innerHTML='Map opened. Loading county property locations…';}
-    else document.getElementById('status').innerHTML='Map opened. Loading county property locations…';
+    // v12.0: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
+    // quota-limited, or temporarily unavailable and otherwise leave a blank map.
+    if(!map){ makeLeaflet(); }
+    document.getElementById('status').innerHTML='Map opened (no Google key required). Loading county property locations…';
     locatedPoints=await locate();
     document.getElementById('status').innerHTML='<span class="good"><b>County lookups complete.</b></span> Drawing property points…';
     document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();renderInterestedPanel();
@@ -585,12 +587,10 @@ async function start(){
     setTimeout(()=>{const missing=unlocatedRows.length?`<details open style="margin-top:8px;text-align:left"><summary style="cursor:pointer;padding:8px 4px;font-size:14px;font-weight:bold">Show ${unlocatedRows.length} properties not located (tap a link below)</summary><div style="max-height:42vh;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:13px;background:#fff;color:#222;border:1px solid #bbb;border-radius:6px;padding:5px">${unlocatedRows.map(x=>{const t=String(x.tms||'').replace(/[^0-9]/g,'');const county=t?`https://propertyviewer.andersoncountysc.org/mapsjs/?TMS=${encodeURIComponent(t)}&disclaimer=false`:'https://propertyviewer.andersoncountysc.org/mapsjs/';const q=encodeURIComponent([x.tms,x.address,x.owner,'Anderson SC'].filter(Boolean).join(' '));return `<div style="padding:8px 4px;border-bottom:1px solid #ddd;overflow-wrap:anywhere"><b>${esc(x.tms||'TMS missing')}</b><br>${esc(x.address||'No description/address')}<br>${esc(x.owner||'Owner not listed')}<br><a style="display:inline-block;padding:6px 8px;margin:4px 4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="${county}">Open county parcel</a><a style="display:inline-block;padding:6px 8px;margin:4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="https://www.google.com/search?q=${q}">Search property</a></div>`}).join('')}</div></details>`:'<div>All listed TMS keys were located.</div>';document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale rows located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown${missing}`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup stopped.</b></span><br>${esc(e.message)}<br>Refresh the page to retry. The base map should remain visible.<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
 }
-function loadGoogleThenStart(){
-  if(!S.googleKey){start();return;}
-  window.gm_authFailure=function(){start();};
-  const s=document.createElement('script');s.async=true;s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(S.googleKey)+'&libraries=marker';s.onload=()=>start();s.onerror=()=>start();document.head.appendChild(s);
-}
-loadGoogleThenStart();
+// Always initialize the key-free map directly. Google Maps remains available
+// through the individual property links, but the embedded map must not depend on
+// a demo key or on Google's script-loading callback.
+start();
 </script></body></html>'''
     html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__PARCEL_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query')).replace('__CLASS__',json.dumps(class_url)).replace('__SSAP__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/0/query')).replace('__SSAP_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Address_Viewer/MapServer/0/query')).replace('__LANDUSE__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/7/query')).replace('__ZONING__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/9/query')).replace('__KEY__',json.dumps(str(api_key or '')))
     components.html(html_doc,height=680,scrolling=False)
@@ -806,12 +806,12 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
 
-st.subheader('🗺️ Google Maps')
+st.subheader('🗺️ Interactive Property Map')
 st.caption('Tap a property dot and choose Interested? Yes or No. Yes turns the dot green and adds a numbered marker to the Interested list; No turns it black and excludes it from the Interested list. Download your spreadsheet from the panel on the map. Map numbers correspond to the second spreadsheet column; the county Item number stays first.')
 with st.expander('🔑 Optional Google Maps demo key',expanded=False):
-    st.write("The embedded map is only a visual convenience. You do not need a Google Maps key to research individual parcels.")
+    st.write("The embedded map now uses OpenStreetMap and does not require a Google Maps key. Individual property popups still include Google Maps and Street View links.")
     st.markdown('[Google Maps JavaScript API key information](https://developers.google.com/maps/documentation/javascript/get-api-key)')
-    google_maps_key=st.text_input('Google Maps demo key (optional)',type='password',placeholder='AIza…',help='Used only in this current Streamlit session.')
+    google_maps_key=st.text_input('Google Maps demo key (optional; not needed for the map)',type='password',placeholder='AIza…',help='Used only in this current Streamlit session.')
 if len(r): google_map(r.head(500),google_maps_key)
 
 st.subheader('🏆 Top opportunities')
