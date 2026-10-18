@@ -315,7 +315,7 @@ def google_map(rows, api_key):
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif}
-#map{min-height:620px;background:#eef2f5}.good{color:#087f23}.bad{color:#a40000}
+#map{height:620px;min-height:620px;background:#eef2f5}.good{color:#087f23}.bad{color:#a40000}
 #status{position:absolute;z-index:500;left:12px;top:12px;background:white;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:14px;max-width:84%}
 .legend{position:absolute;z-index:500;right:12px;top:12px;background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px}
 .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}.land{background:#2e7d32}.house{background:#c62828}.mobile{background:#1565c0}.unknown{background:#f9a825}
@@ -323,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.6: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.6: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.7: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.7: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -684,7 +684,7 @@ if(window.L)startWhenReady();
 setTimeout(()=>{if(!started){const el=document.getElementById('status');if(el && /Loading county parcel locations/.test(el.textContent))el.innerHTML='<span style="color:#a40000"><b>Map startup timed out.</b></span><br>The map library did not initialize. This happens before property lookups, so the Google demo key and county parcel data are not the first things to troubleshoot. Try Chrome and switch between Wi-Fi and mobile data.';}},15000);
 </script></body></html>'''
     html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__PARCEL_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query')).replace('__CLASS__',json.dumps(class_url)).replace('__SSAP__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/0/query')).replace('__SSAP_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Address_Viewer/MapServer/0/query')).replace('__LANDUSE__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/7/query')).replace('__ZONING__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/9/query')).replace('__KEY__',json.dumps(str(api_key or '')))
-    components.html(html_doc,height=680,scrolling=False)
+    components.html(html_doc,height=1040,scrolling=False)
 
 if 'data' not in st.session_state: st.session_state.data=None
 if 'fav' not in st.session_state: st.session_state.fav=set()
@@ -898,7 +898,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.6: restored the Leaflet map with clickable property popups. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
+st.caption('Version 13.7: moved the Interested/No/Not reviewed panel below the Leaflet map with clickable property popups. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
 # Use the existing browser-side Leaflet implementation: unlike the native map,
 # its point popups contain the links and Yes/No controls and save choices locally.
 # It also queries the county's parcel and E911 layers directly from the browser,
