@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.7')
-st.info('v11.7 adds map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.8')
+st.info('v11.8 adds map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -448,7 +448,7 @@ async function locate(){
     for(const base of bases){
       try{
         const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&resultRecordCount=100&f=json';
-        const j=await jsonp(u,18000); candidates.push(...(j.features||[]));
+        const j=await jsonp(u,8000); candidates.push(...(j.features||[]));
       }catch(e){console.warn('text parcel fallback',e);}
     }
     const ranked=candidates.map(f=>{const a=f.attributes||{};const own=overlap(owner,a.TAXOWNSTR||'');const road=Math.max(overlap(addr,a.DESCRIPTIO||''),overlap(addr,a.PHYS_ADDR||''));const geom=centroid(f.geometry);let score=own*3+road*2;const acre=Number(a.ACRES??a.ACREAGE);if(Number.isFinite(acre)&&acre>0&&Number(x.acres)>0){const diff=Math.abs(acre-Number(x.acres))/Number(x.acres);if(diff<=0.2)score+=2;else if(diff>0.6)score-=2;}return {f,a,own,road,geom,score};}).filter(z=>z.geom&&z.own>=1&&z.road>=1).sort((a,b)=>b.score-a.score);
@@ -457,16 +457,28 @@ async function locate(){
     if(ranked.length>1 && ranked[0].score-ranked[1].score<2)return [];
     return ranked.slice(0,1);
   }
-  for(const x of S.data){
-    const k=key(x.key); if(!k||already.has(k))continue;
-    try{
-      const candidates=await textParcelCandidates(x);
-      if(!candidates.length)continue;
-      const z=candidates[0],a=z.a,c=z.geom;
-      const p=Object.assign({},a,{TMS:a.TMS||x.tms,PHYS_ADDR:a.PHYS_ADDR||a.DESCRIPTIO||x.address,__match_method:'owner + road description fallback'});
-      out.push({x,p,c}); already.add(k);
-    }catch(e){console.warn('fallback match failed',x.tms,e);}
+  const fallbackRows=S.data.filter(x=>{const k=key(x.key);return !!k&&!already.has(k);});
+  let fallbackDone=0;
+  // Use a small worker pool so missed parcels are researched concurrently rather than
+  // serially waiting on each county layer. Keep the fallback conservative.
+  let fallbackIndex=0;
+  async function fallbackWorker(){
+    while(fallbackIndex<fallbackRows.length){
+      const x=fallbackRows[fallbackIndex++];
+      document.getElementById('status').innerHTML=`Matching county parcel records… <b>${fallbackDone}</b> of <b>${fallbackRows.length}</b> fallback checks`;
+      const k=key(x.key);
+      try{
+        const candidates=await textParcelCandidates(x);
+        if(candidates.length){
+          const z=candidates[0],a=z.a,c=z.geom;
+          const p=Object.assign({},a,{TMS:a.TMS||x.tms,PHYS_ADDR:a.PHYS_ADDR||a.DESCRIPTIO||x.address,__match_method:'owner + road description fallback'});
+          out.push({x,p,c}); already.add(k);
+        }
+      }catch(e){console.warn('fallback match failed',x.tms,e);}
+      fallbackDone++;
+    }
   }
+  await Promise.all(Array.from({length:Math.min(4,fallbackRows.length)},()=>fallbackWorker()));
   const found=new Set(out.map(q=>key(q.x.key)));
   unlocatedRows=S.data.filter(x=>!key(x.key)||!found.has(key(x.key)));
   return out;
@@ -546,14 +558,17 @@ function renderMarkers(){
 }
 async function start(){
   try{
-    locatedPoints=await locate();
+    // Initialize the base map immediately so the user never sees a blank map while
+    // county GIS and fallback matching are still running.
     const ok=makeGoogle();
-    if(!ok){makeLeaflet();document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> Using a key-free map because Google Maps is not authenticated. Google Maps links remain available on every point.';}
-    else document.getElementById('status').innerHTML='<span class="good"><b>Interactive map ready.</b></span> County parcel coordinates matched by TMS.';
+    if(!ok){makeLeaflet();document.getElementById('status').innerHTML='Map opened. Loading county property locations…';}
+    else document.getElementById('status').innerHTML='Map opened. Loading county property locations…';
+    locatedPoints=await locate();
+    document.getElementById('status').innerHTML='<span class="good"><b>County lookups complete.</b></span> Drawing property points…';
     document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();renderInterestedPanel();
     const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
     setTimeout(()=>{const missing=unlocatedRows.length?`<details open style="margin-top:8px;text-align:left"><summary style="cursor:pointer;padding:8px 4px;font-size:14px;font-weight:bold">Show ${unlocatedRows.length} properties not located (tap a link below)</summary><div style="max-height:42vh;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:13px;background:#fff;color:#222;border:1px solid #bbb;border-radius:6px;padding:5px">${unlocatedRows.map(x=>{const t=String(x.tms||'').replace(/[^0-9]/g,'');const county=t?`https://propertyviewer.andersoncountysc.org/mapsjs/?TMS=${encodeURIComponent(t)}&disclaimer=false`:'https://propertyviewer.andersoncountysc.org/mapsjs/';const q=encodeURIComponent([x.tms,x.address,x.owner,'Anderson SC'].filter(Boolean).join(' '));return `<div style="padding:8px 4px;border-bottom:1px solid #ddd;overflow-wrap:anywhere"><b>${esc(x.tms||'TMS missing')}</b><br>${esc(x.address||'No description/address')}<br>${esc(x.owner||'Owner not listed')}<br><a style="display:inline-block;padding:6px 8px;margin:4px 4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="${county}">Open county parcel</a><a style="display:inline-block;padding:6px 8px;margin:4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="https://www.google.com/search?q=${q}">Search property</a></div>`}).join('')}</div></details>`:'<div>All listed TMS keys were located.</div>';document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale rows located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown${missing}`;},500);
-  }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup failed.</b></span><br>${esc(e.message)}<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
+  }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup stopped.</b></span><br>${esc(e.message)}<br>Refresh the page to retry. The base map should remain visible.<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
 }
 function loadGoogleThenStart(){
   if(!S.googleKey){start();return;}
