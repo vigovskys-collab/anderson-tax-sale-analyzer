@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.2')
-st.info('v13.2 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.3')
+st.info('v13.3 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -323,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.2: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.2: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.3: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.3: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -662,7 +662,7 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    // v13.2: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // v13.3: Start with the key-free Leaflet/OpenStreetMap map immediately.
     // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
     // quota-limited, or temporarily unavailable and otherwise leave a blank map.
     if(!map){ makeLeaflet(); }
@@ -898,7 +898,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.0 uses Streamlit’s native map instead of a custom JavaScript iframe. Map numbers match the second spreadsheet column; the county Item number remains first. Select a property below to mark Interested? Yes or No.')
+st.caption('Version 13.3 uses a light interactive map with color-coded, selectable property points. Map numbers match the second spreadsheet column; the county Item number remains first.')
 if 'property_decisions_v13' not in st.session_state: st.session_state.property_decisions_v13={}
 map_rows=r.head(500).copy()
 with st.spinner('Looking up parcel locations from Anderson County GIS…'):
@@ -914,8 +914,46 @@ if len(located_map):
     located_map['Map #']=located_map.index.map(lambda i:int(i)+1)
     located_map['Decision']=located_map['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
     located_map['Map label']=located_map.apply(lambda z: ('✓ ' if z['Decision']=='Yes' else ('✕ ' if z['Decision']=='No' else ''))+str(z['Map #']),axis=1)
-    st.map(located_map.rename(columns={'__lat':'lat','__lon':'lon'}),latitude='lat',longitude='lon',size=90)
-    st.caption(f'County GIS returned locations for {len(located_map)} of {len(map_rows)} currently filtered properties. The native map shows all located properties; use the selector below to review one at a time.')
+    def point_color(z):
+        d=str(z.get('Decision','Undecided'))
+        if d=='Yes': return [22,128,59,230]
+        if d=='No': return [35,35,35,230]
+        t=str(z.get('Type','')).lower(); lu=str(z.get('LAND_USE',z.get('Land Use',''))).lower(); blob=t+' '+lu+' '+str(z.get('CLASS',''))
+        if 'mobile' in blob or 'manufactured' in blob: return [21,101,192,230]
+        if any(k in blob for k in ['house','residential','improv','structure']): return [198,40,40,230]
+        if 'vacant' in blob or 'land' in blob or 'agriculture' in blob: return [46,125,50,230]
+        return [230,160,0,230]
+    located_map['__color']=located_map.apply(point_color,axis=1)
+    try:
+        import pydeck as pdk
+        deck_data=located_map.copy()
+        deck_data['lat']=pd.to_numeric(deck_data['__lat'],errors='coerce')
+        deck_data['lon']=pd.to_numeric(deck_data['__lon'],errors='coerce')
+        deck_data['radius']=110
+        deck_data['fill_color']=deck_data['__color']
+        deck_data['tip']=deck_data.apply(lambda z:f"Map #{int(z['Map #'])} · County item {z.get('Item','—')}\nTMS: {z.get('TMS_CANONICAL',z.get('TMS',''))}\n{z.get('Owner','Unknown owner')}\n{z.get('Research Address',z.get('Address',''))}\nDecision: {z.get('Decision','Undecided')}",axis=1)
+        layer=pdk.Layer('ScatterplotLayer',data=deck_data,get_position='[lon, lat]',get_fill_color='fill_color',get_line_color=[255,255,255,255],line_width_min_pixels=1,get_radius='radius',radius_min_pixels=5,radius_max_pixels=13,pickable=True,auto_highlight=True)
+        view=pdk.ViewState(latitude=float(deck_data['lat'].median()),longitude=float(deck_data['lon'].median()),zoom=10,pitch=0)
+        deck=pdk.Deck(layers=[layer],initial_view_state=view,tooltip={'text':'{tip}'},map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json')
+        selection=st.pydeck_chart(deck,key='taxsale_interactive_map_v133',on_select='rerun',selection_mode='single-object',use_container_width=True)
+        selected_index=None
+        try:
+            picked=selection.selection.objects
+            for _,items in picked.items():
+                if items:
+                    picked_row=items[0]
+                    selected_index=int(picked_row.get('index',-1)) if str(picked_row.get('index','')).isdigit() else None
+                    if selected_index is None:
+                        picked_tms=str(picked_row.get('TMS_KEY',picked_row.get('__key','')))
+                        matches=located_map.index[located_map['__key'].astype(str)==picked_tms].tolist()
+                        if matches: selected_index=int(matches[0])
+        except Exception: pass
+        if selected_index is not None and selected_index in map_rows.index:
+            st.session_state['native_map_property_choice']=selected_index
+        st.caption(f'County GIS returned locations for {len(located_map)} of {len(map_rows)} currently filtered properties. Tap a colored point to select it, or use the property selector below.')
+    except Exception as map_exc:
+        st.warning('Interactive map could not initialize: '+str(map_exc)[:180])
+        st.dataframe(located_map[['Map #','TMS_CANONICAL','__lat','__lon','Decision']],use_container_width=True,hide_index=True)
 else:
     st.warning('The county GIS did not return coordinates for these rows in this attempt. The property review controls and county parcel links below are still available.')
 if gis_diag.get('sample_error'):
