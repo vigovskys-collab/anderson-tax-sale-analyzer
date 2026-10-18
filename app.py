@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v12.1')
-st.info('v12.1 uses the current NewPropertyViewer parcel layer as the primary GIS source, retains the secondary parcel-layer fallback, and starts a key-free map first. It keeps map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v12.2')
+st.info('v12.2 uses the current NewPropertyViewer parcel layer as the primary GIS source, retains the secondary parcel-layer fallback, and starts a key-free map first. It keeps map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -251,7 +251,18 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+// Load Leaflet from two independent CDNs. If neither is reachable, show a clear error.
+(function loadLeaflet(){
+  const sources=['https://unpkg.com/leaflet@1.9.4/dist/leaflet.js','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'];
+  function attempt(i){
+    if(window.L){window.dispatchEvent(new Event('leaflet-ready'));return;}
+    if(i>=sources.length){const el=document.getElementById('status');if(el)el.innerHTML='<span style="color:#a40000"><b>Map library could not load.</b></span><br>Your browser or network could not load the map code from either map-library source. This is separate from Anderson County GIS. Try opening the app in Chrome or switching Wi-Fi/mobile data.';return;}
+    const sc=document.createElement('script');sc.src=sources[i];sc.crossOrigin='anonymous';sc.onload=()=>{if(window.L)window.dispatchEvent(new Event('leaflet-ready'));else attempt(i+1);};sc.onerror=()=>attempt(i+1);document.head.appendChild(sc);
+  }
+  attempt(0);
+})();
+</script>
 <script>
 const S=window.TAXSALE; let map=null,googleMode=false,info=null,markers=[],locatedPoints=[],unlocatedRows=[];
 const byKey=new Map(S.data.map(x=>[key(x.key),x]));
@@ -334,7 +345,7 @@ async function queryClassBatch(keys){
   if(!safe.length)return [];
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
   const u=S.classParcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,CLASS,IMPRV,RATIO')+'&returnGeometry=false&f=json';
-  const j=await jsonp(u,9000); return j.features||[];
+  const j=await jsonp(u,5000); return j.features||[];
 }
 async function queryParcelBatch(keys){
   const safe=tmsVariants(keys);
@@ -348,7 +359,7 @@ async function queryParcelBatch(keys){
   const all=[];
   // Query both parcel services in parallel with a short timeout so one slow layer
   // cannot hold up every batch on a mobile browser.
-  const results=await Promise.all(urls.map(async u=>{try{const j=await jsonp(u,9000);return j.features||[];}catch(e){console.warn('parcel source',e);return [];}}));
+  const results=await Promise.all(urls.map(async u=>{try{const j=await jsonp(u,5000);return j.features||[];}catch(e){console.warn('parcel source',e);return [];}}));
   results.forEach(fs=>all.push(...fs));
   const seen=new Set(),out=[];
   for(const f of all){const k=key((f.attributes||{}).TMS);if(!k||seen.has(k))continue;seen.add(k);out.push(f);}
@@ -358,7 +369,7 @@ async function queryAuxBatch(keys){
   const safe=tmsVariants(keys);
   if(!safe.length)return {ssap:[],land:[],zone:[]};
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
-  const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u,9000);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
+  const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u,5000);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
   // Query BOTH county E911/SSAP layers for every batch. The primary layer can
   // return some matches while omitting other TMS values, so using the fallback
   // only when the entire primary response is empty silently loses properties.
@@ -463,7 +474,7 @@ async function locate(){
     for(const base of bases){
       try{
         const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&resultRecordCount=100&f=json';
-        const j=await jsonp(u,8000); candidates.push(...(j.features||[]));
+        const j=await jsonp(u,5000); candidates.push(...(j.features||[]));
       }catch(e){console.warn('text parcel fallback',e);}
     }
     const ranked=candidates.map(f=>{const a=f.attributes||{};const own=overlap(owner,a.TAXOWNSTR||'');const road=Math.max(overlap(addr,a.DESCRIPTIO||''),overlap(addr,a.PHYS_ADDR||''));const geom=centroid(f.geometry);let score=own*3+road*2;const acre=Number(a.ACRES??a.ACREAGE);if(Number.isFinite(acre)&&acre>0&&Number(x.acres)>0){const diff=Math.abs(acre-Number(x.acres))/Number(x.acres);if(diff<=0.2)score+=2;else if(diff>0.6)score-=2;}return {f,a,own,road,geom,score};}).filter(z=>z.geom&&z.own>=1&&z.road>=1).sort((a,b)=>b.score-a.score);
@@ -575,7 +586,7 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    // v12.1: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // v12.2: Start with the key-free Leaflet/OpenStreetMap map immediately.
     // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
     // quota-limited, or temporarily unavailable and otherwise leave a blank map.
     if(!map){ makeLeaflet(); }
@@ -590,7 +601,11 @@ async function start(){
 // Always initialize the key-free map directly. Google Maps remains available
 // through the individual property links, but the embedded map must not depend on
 // a demo key or on Google's script-loading callback.
-start();
+let started=false;
+function startWhenReady(){if(started)return;if(!window.L){return;}started=true;start();}
+window.addEventListener('leaflet-ready',startWhenReady);
+if(window.L)startWhenReady();
+setTimeout(()=>{if(!started){const el=document.getElementById('status');if(el && /Loading county parcel locations/.test(el.textContent))el.innerHTML='<span style="color:#a40000"><b>Map startup timed out.</b></span><br>The map library did not initialize. This happens before property lookups, so the Google demo key and county parcel data are not the first things to troubleshoot. Try Chrome and switch between Wi-Fi and mobile data.';}},15000);
 </script></body></html>'''
     html_doc=html_doc.replace('__DATA__',data_json).replace('__PARCEL__',json.dumps(parcel_url)).replace('__PARCEL_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query')).replace('__CLASS__',json.dumps(class_url)).replace('__SSAP__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/0/query')).replace('__SSAP_FALLBACK__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Address_Viewer/MapServer/0/query')).replace('__LANDUSE__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/7/query')).replace('__ZONING__',json.dumps('https://propertyviewer.andersoncountysc.org/arcgis/rest/services/QueryMap/MapServer/9/query')).replace('__KEY__',json.dumps(str(api_key or '')))
     components.html(html_doc,height=680,scrolling=False)
