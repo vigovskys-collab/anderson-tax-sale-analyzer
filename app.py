@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.4')
-st.info('v13.4 keeps the light interactive map and makes the selected-property review panel more complete: Yes/No decisions, County parcel, Google Maps, Street View, Zillow, and Realtor links.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.5')
+st.info('v13.5 restores the clickable Leaflet map popups with property links, Interested Yes/No buttons, and CSV downloads inside the map.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -323,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.3: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.3: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.5: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.5: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -662,7 +662,7 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    // v13.3: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // v13.5: Start with the key-free Leaflet/OpenStreetMap map immediately.
     // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
     // quota-limited, or temporarily unavailable and otherwise leave a blank map.
     if(!map){ makeLeaflet(); }
@@ -898,109 +898,13 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.4: tap a point to choose a property, then use the review panel directly below the map for Interested? Yes/No and property links. Map numbers match the second spreadsheet column; the county Item number remains first.')
-if 'property_decisions_v13' not in st.session_state: st.session_state.property_decisions_v13={}
-map_rows=r.head(500).copy()
-with st.spinner('Looking up parcel locations from Anderson County GIS…'):
-    centroid_map=fetch_county_centroids(tuple(map_rows['TMS_CANONICAL'].fillna('').astype(str).tolist())) if len(map_rows) else {}
-map_rows['__key']=map_rows['TMS_KEY'].astype(str)
-map_rows['__lat']=map_rows['__key'].map(lambda k: centroid_map.get(k,{}).get('lat'))
-map_rows['__lon']=map_rows['__key'].map(lambda k: centroid_map.get(k,{}).get('lon'))
-located_map=map_rows.dropna(subset=['__lat','__lon']).copy()
-gis_diag=centroid_map.get('__diagnostic__',{})
-if gis_diag.get('ssl_fallback_used'):
-    st.warning('County GIS certificate validation failed from the hosted app. The app retried only the public, read-only Anderson County GIS query with certificate verification disabled for that request. If you prefer not to use this fallback, stop here and we can instead diagnose the certificate trust chain.')
-if len(located_map):
-    located_map['Map #']=located_map.index.map(lambda i:int(i)+1)
-    located_map['__map_row_index']=located_map.index.astype(int)
-    located_map['Decision']=located_map['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
-    located_map['Map label']=located_map.apply(lambda z: ('✓ ' if z['Decision']=='Yes' else ('✕ ' if z['Decision']=='No' else ''))+str(z['Map #']),axis=1)
-    def point_color(z):
-        d=str(z.get('Decision','Undecided'))
-        if d=='Yes': return [22,128,59,230]
-        if d=='No': return [35,35,35,230]
-        t=str(z.get('Type',z.get('Sale Type',''))).lower(); lu=str(z.get('LAND_USE',z.get('Land Use',''))).lower(); blob=t+' '+lu+' '+str(z.get('CLASS',''))+' '+str(z.get('Mobile', ''))+' '+str(z.get('Property Description / Address',z.get('Research Address','')))
-        if 'mobile' in blob or 'manufactured' in blob: return [21,101,192,230]
-        if any(k in blob for k in ['house','residential','improv','structure']): return [198,40,40,230]
-        if 'vacant' in blob or 'land' in blob or 'agriculture' in blob: return [46,125,50,230]
-        return [230,160,0,230]
-    located_map['__color']=located_map.apply(point_color,axis=1)
-    try:
-        import pydeck as pdk
-        deck_data=located_map.copy()
-        deck_data['lat']=pd.to_numeric(deck_data['__lat'],errors='coerce')
-        deck_data['lon']=pd.to_numeric(deck_data['__lon'],errors='coerce')
-        deck_data['radius']=110
-        deck_data['__map_row_index']=pd.to_numeric(deck_data['__map_row_index'],errors='coerce').fillna(-1).astype(int)
-        deck_data['fill_color']=deck_data['__color']
-        deck_data['tip']=deck_data.apply(lambda z:f"Map #{int(z['Map #'])} · County item {z.get('Item','—')}\nTMS: {z.get('TMS_CANONICAL',z.get('TMS',''))}\n{z.get('Owner','Unknown owner')}\n{z.get('Research Address',z.get('Address',''))}\nDecision: {z.get('Decision','Undecided')}",axis=1)
-        layer=pdk.Layer('ScatterplotLayer',data=deck_data,get_position='[lon, lat]',get_fill_color='fill_color',get_line_color=[255,255,255,255],line_width_min_pixels=1,get_radius='radius',radius_min_pixels=5,radius_max_pixels=13,pickable=True,auto_highlight=True)
-        view=pdk.ViewState(latitude=float(deck_data['lat'].median()),longitude=float(deck_data['lon'].median()),zoom=10,pitch=0)
-        deck=pdk.Deck(layers=[layer],initial_view_state=view,tooltip={'text':'{tip}'},map_style='https://basemaps.cartocdn.com/gl/positron-gl-style/style.json')
-        selection=st.pydeck_chart(deck,key='taxsale_interactive_map_v133',on_select='rerun',selection_mode='single-object',use_container_width=True)
-        selected_index=None
-        try:
-            picked=selection.selection.objects
-            for _,items in picked.items():
-                if items:
-                    picked_row=items[0]
-                    raw_index=picked_row.get('__map_row_index',picked_row.get('index'))
-                    selected_index=int(raw_index) if str(raw_index).lstrip('-').isdigit() and int(raw_index)>=0 else None
-                    if selected_index is None:
-                        picked_tms=str(picked_row.get('TMS_KEY',picked_row.get('__key',picked_row.get('TMS_CANONICAL',''))))
-                        matches=located_map.index[located_map['__key'].astype(str)==picked_tms].tolist()
-                        if not matches and picked_tms:
-                            matches=located_map.index[located_map['TMS_CANONICAL'].astype(str)==picked_tms].tolist()
-                        if matches: selected_index=int(matches[0])
-        except Exception: pass
-        if selected_index is not None and selected_index in map_rows.index:
-            st.session_state['native_map_property_choice']=selected_index
-        st.caption(f'County GIS returned locations for {len(located_map)} of {len(map_rows)} currently filtered properties. Tap a point, then review the selected property in the panel below. If tapping does not change the selection, use the property selector.')
-    except Exception as map_exc:
-        st.warning('Interactive map could not initialize: '+str(map_exc)[:180])
-        st.dataframe(located_map[['Map #','TMS_CANONICAL','__lat','__lon','Decision']],use_container_width=True,hide_index=True)
-else:
-    st.warning('The county GIS did not return coordinates for these rows in this attempt. The property review controls and county parcel links below are still available.')
-if gis_diag.get('sample_error'):
-    st.caption('GIS query diagnostic: ' + str(gis_diag['sample_error'])[:250])
-if len(map_rows):
-    options=map_rows.index.tolist()
-    chosen=st.selectbox('Choose a property to review',options,format_func=lambda i:f"Map #{int(i)+1} · {map_rows.loc[i,'TMS_CANONICAL'] or map_rows.loc[i,'TMS']} · {map_rows.loc[i,'Owner'] or 'Unknown owner'} · {map_rows.loc[i,'Research Address'] or map_rows.loc[i,'Address']}",key='native_map_property_choice')
-    chosen_row=map_rows.loc[chosen]; decision_key=str(chosen_row['TMS_KEY']); current=st.session_state.property_decisions_v13.get(decision_key,'Undecided')
-    st.markdown('### 🔎 Selected property details')
-    st.markdown(f"**County item:** {chosen_row['Item'] or '—'} · **Map number:** {int(chosen)+1}  \n**TMS:** {chosen_row['TMS_CANONICAL'] or chosen_row['TMS']}  \n**Owner:** {chosen_row['Owner'] or 'Unknown'}  \n**Property:** {chosen_row['Research Address'] or chosen_row['Address'] or 'No address listed'}  \n**Acres:** {chosen_row.get('Acres','—')} · **Bedrooms:** {chosen_row.get('Web Beds','—')} · **Bathrooms:** {chosen_row.get('Web Baths','—')} · **Sq ft:** {chosen_row.get('Web Sqft','—')}  \n**Starting bid:** {chosen_row.get('Opening Bid','—')}")
-    ca,cb,cc=st.columns([1,1,2])
-    if ca.button('✅ Interested — Yes',use_container_width=True,key='native_yes'):
-        st.session_state.property_decisions_v13[decision_key]='Yes'; st.rerun()
-    if cb.button('✖ No — exclude',use_container_width=True,key='native_no'):
-        st.session_state.property_decisions_v13[decision_key]='No'; st.rerun()
-    if cc.button('Clear decision',use_container_width=True,key='native_clear'):
-        st.session_state.property_decisions_v13.pop(decision_key,None); st.rerun()
-    st.write(f"Current decision: **{current}**")
-    cv=county_viewer_url(chosen_row['TMS_CANONICAL'] or chosen_row['TMS'])
-    addr=str(chosen_row['Research Address'] or chosen_row['Address'] or '').strip()
-    search_text=(addr or str(chosen_row['TMS_CANONICAL'] or chosen_row['TMS']))+', Anderson County, SC'
-    gm='https://www.google.com/maps/search/?api=1&query='+quote_plus(search_text)
-    if chosen in located_map.index:
-        lat=float(located_map.loc[chosen,'__lat']); lon=float(located_map.loc[chosen,'__lon'])
-        sv=f'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lon}'
-        gm_exact=f'https://www.google.com/maps/search/?api=1&query={lat},{lon}'
-    else:
-        sv='https://www.google.com/maps/search/?api=1&query='+quote_plus(search_text)
-        gm_exact=gm
-    zq='https://www.google.com/search?hl=en&q='+quote_plus('site:zillow.com/homedetails "'+addr+'" Anderson SC') if addr else 'https://www.zillow.com/anderson-sc/'
-    rq='https://www.google.com/search?hl=en&q='+quote_plus('site:realtor.com/realestateandhomes "'+addr+'" Anderson SC') if addr else 'https://www.realtor.com/realestateandhomes-search/Anderson-County_SC'
-    st.markdown('**Property links**')
-    l1,l2,l3=st.columns(3); l1.link_button('🏛️ Exact County Parcel',cv,use_container_width=True); l2.link_button('🗺️ Google Maps',gm_exact,use_container_width=True); l3.link_button('📍 Street View',sv,use_container_width=True)
-    l4,l5=st.columns(2); l4.link_button('🏠 Check Zillow',zq,use_container_width=True); l5.link_button('🏠 Check Realtor.com',rq,use_container_width=True)
-    all_decisions=map_rows.copy(); all_decisions['Interested?']=all_decisions['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
-    interested=all_decisions[all_decisions['Interested?']=='Yes'].copy()
-    st.markdown(f"**Interested properties: {len(interested)} · Marked No: {(all_decisions['Interested?']=='No').sum()} · Not reviewed: {(all_decisions['Interested?']=='Undecided').sum()}**")
-    export_cols=['Item','TMS_CANONICAL','Owner','Research Address','City','Acres','Web Beds','Web Baths','Web Sqft','Opening Bid','Assessed','GIS Market','Tax Year','Type','Interested?']
-    export=all_decisions[[c for c in export_cols if c in all_decisions.columns]].rename(columns={'Item':'County Item #','TMS_CANONICAL':'TMS','Research Address':'Property Description / Address','Opening Bid':'Starting Bid','Assessed':'Assessed Value','GIS Market':'GIS Market Value','Web Beds':'Bedrooms','Web Baths':'Bathrooms','Web Sqft':'Square Feet'})
-    e1,e2=st.columns(2)
-    e1.download_button('⬇ Download all reviewed properties CSV',export.to_csv(index=False).encode('utf-8-sig'),'anderson_all_properties_v13.csv','text/csv',use_container_width=True)
-    e2.download_button('⬇ Download Interested properties CSV',export[export['Interested?']=='Yes'].to_csv(index=False).encode('utf-8-sig'),'anderson_interested_properties_v13.csv','text/csv',use_container_width=True)
+st.caption('Version 13.5: restored the Leaflet map with clickable property popups. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
+# Use the existing browser-side Leaflet implementation: unlike the native map,
+# its point popups contain the links and Yes/No controls and save choices locally.
+# It also queries the county's parcel and E911 layers directly from the browser,
+# avoiding the server-side SSL verification failure that limited the native map.
+google_map(r.head(500).copy(), '')
+st.info('Map workflow: tap a colored dot → choose Yes or No in the popup → use the download buttons in the map to save your choices. Browser-side decisions are stored locally; download a CSV backup before closing the page.')
 
 st.subheader('🏆 Top opportunities')
 if len(r)==0: st.warning('No properties match the current filters.')
