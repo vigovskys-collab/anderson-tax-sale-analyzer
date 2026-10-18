@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.3')
-st.info('v13.3 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.4')
+st.info('v13.4 keeps the light interactive map and makes the selected-property review panel more complete: Yes/No decisions, County parcel, Google Maps, Street View, Zillow, and Realtor links.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -898,7 +898,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.3 uses a light interactive map with color-coded, selectable property points. Map numbers match the second spreadsheet column; the county Item number remains first.')
+st.caption('Version 13.4: tap a point to choose a property, then use the review panel directly below the map for Interested? Yes/No and property links. Map numbers match the second spreadsheet column; the county Item number remains first.')
 if 'property_decisions_v13' not in st.session_state: st.session_state.property_decisions_v13={}
 map_rows=r.head(500).copy()
 with st.spinner('Looking up parcel locations from Anderson County GIS…'):
@@ -912,13 +912,14 @@ if gis_diag.get('ssl_fallback_used'):
     st.warning('County GIS certificate validation failed from the hosted app. The app retried only the public, read-only Anderson County GIS query with certificate verification disabled for that request. If you prefer not to use this fallback, stop here and we can instead diagnose the certificate trust chain.')
 if len(located_map):
     located_map['Map #']=located_map.index.map(lambda i:int(i)+1)
+    located_map['__map_row_index']=located_map.index.astype(int)
     located_map['Decision']=located_map['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
     located_map['Map label']=located_map.apply(lambda z: ('✓ ' if z['Decision']=='Yes' else ('✕ ' if z['Decision']=='No' else ''))+str(z['Map #']),axis=1)
     def point_color(z):
         d=str(z.get('Decision','Undecided'))
         if d=='Yes': return [22,128,59,230]
         if d=='No': return [35,35,35,230]
-        t=str(z.get('Type','')).lower(); lu=str(z.get('LAND_USE',z.get('Land Use',''))).lower(); blob=t+' '+lu+' '+str(z.get('CLASS',''))
+        t=str(z.get('Type',z.get('Sale Type',''))).lower(); lu=str(z.get('LAND_USE',z.get('Land Use',''))).lower(); blob=t+' '+lu+' '+str(z.get('CLASS',''))+' '+str(z.get('Mobile', ''))+' '+str(z.get('Property Description / Address',z.get('Research Address','')))
         if 'mobile' in blob or 'manufactured' in blob: return [21,101,192,230]
         if any(k in blob for k in ['house','residential','improv','structure']): return [198,40,40,230]
         if 'vacant' in blob or 'land' in blob or 'agriculture' in blob: return [46,125,50,230]
@@ -930,6 +931,7 @@ if len(located_map):
         deck_data['lat']=pd.to_numeric(deck_data['__lat'],errors='coerce')
         deck_data['lon']=pd.to_numeric(deck_data['__lon'],errors='coerce')
         deck_data['radius']=110
+        deck_data['__map_row_index']=pd.to_numeric(deck_data['__map_row_index'],errors='coerce').fillna(-1).astype(int)
         deck_data['fill_color']=deck_data['__color']
         deck_data['tip']=deck_data.apply(lambda z:f"Map #{int(z['Map #'])} · County item {z.get('Item','—')}\nTMS: {z.get('TMS_CANONICAL',z.get('TMS',''))}\n{z.get('Owner','Unknown owner')}\n{z.get('Research Address',z.get('Address',''))}\nDecision: {z.get('Decision','Undecided')}",axis=1)
         layer=pdk.Layer('ScatterplotLayer',data=deck_data,get_position='[lon, lat]',get_fill_color='fill_color',get_line_color=[255,255,255,255],line_width_min_pixels=1,get_radius='radius',radius_min_pixels=5,radius_max_pixels=13,pickable=True,auto_highlight=True)
@@ -942,15 +944,18 @@ if len(located_map):
             for _,items in picked.items():
                 if items:
                     picked_row=items[0]
-                    selected_index=int(picked_row.get('index',-1)) if str(picked_row.get('index','')).isdigit() else None
+                    raw_index=picked_row.get('__map_row_index',picked_row.get('index'))
+                    selected_index=int(raw_index) if str(raw_index).lstrip('-').isdigit() and int(raw_index)>=0 else None
                     if selected_index is None:
-                        picked_tms=str(picked_row.get('TMS_KEY',picked_row.get('__key','')))
+                        picked_tms=str(picked_row.get('TMS_KEY',picked_row.get('__key',picked_row.get('TMS_CANONICAL',''))))
                         matches=located_map.index[located_map['__key'].astype(str)==picked_tms].tolist()
+                        if not matches and picked_tms:
+                            matches=located_map.index[located_map['TMS_CANONICAL'].astype(str)==picked_tms].tolist()
                         if matches: selected_index=int(matches[0])
         except Exception: pass
         if selected_index is not None and selected_index in map_rows.index:
             st.session_state['native_map_property_choice']=selected_index
-        st.caption(f'County GIS returned locations for {len(located_map)} of {len(map_rows)} currently filtered properties. Tap a colored point to select it, or use the property selector below.')
+        st.caption(f'County GIS returned locations for {len(located_map)} of {len(map_rows)} currently filtered properties. Tap a point, then review the selected property in the panel below. If tapping does not change the selection, use the property selector.')
     except Exception as map_exc:
         st.warning('Interactive map could not initialize: '+str(map_exc)[:180])
         st.dataframe(located_map[['Map #','TMS_CANONICAL','__lat','__lon','Decision']],use_container_width=True,hide_index=True)
@@ -962,7 +967,8 @@ if len(map_rows):
     options=map_rows.index.tolist()
     chosen=st.selectbox('Choose a property to review',options,format_func=lambda i:f"Map #{int(i)+1} · {map_rows.loc[i,'TMS_CANONICAL'] or map_rows.loc[i,'TMS']} · {map_rows.loc[i,'Owner'] or 'Unknown owner'} · {map_rows.loc[i,'Research Address'] or map_rows.loc[i,'Address']}",key='native_map_property_choice')
     chosen_row=map_rows.loc[chosen]; decision_key=str(chosen_row['TMS_KEY']); current=st.session_state.property_decisions_v13.get(decision_key,'Undecided')
-    st.markdown(f"**County item:** {chosen_row['Item'] or '—'} · **Map number:** {int(chosen)+1}  \n**TMS:** {chosen_row['TMS_CANONICAL'] or chosen_row['TMS']}  \n**Owner:** {chosen_row['Owner'] or 'Unknown'}  \n**Property:** {chosen_row['Research Address'] or chosen_row['Address'] or 'No address listed'}")
+    st.markdown('### 🔎 Selected property details')
+    st.markdown(f"**County item:** {chosen_row['Item'] or '—'} · **Map number:** {int(chosen)+1}  \n**TMS:** {chosen_row['TMS_CANONICAL'] or chosen_row['TMS']}  \n**Owner:** {chosen_row['Owner'] or 'Unknown'}  \n**Property:** {chosen_row['Research Address'] or chosen_row['Address'] or 'No address listed'}  \n**Acres:** {chosen_row.get('Acres','—')} · **Bedrooms:** {chosen_row.get('Web Beds','—')} · **Bathrooms:** {chosen_row.get('Web Baths','—')} · **Sq ft:** {chosen_row.get('Web Sqft','—')}  \n**Starting bid:** {chosen_row.get('Opening Bid','—')}")
     ca,cb,cc=st.columns([1,1,2])
     if ca.button('✅ Interested — Yes',use_container_width=True,key='native_yes'):
         st.session_state.property_decisions_v13[decision_key]='Yes'; st.rerun()
@@ -973,8 +979,20 @@ if len(map_rows):
     st.write(f"Current decision: **{current}**")
     cv=county_viewer_url(chosen_row['TMS_CANONICAL'] or chosen_row['TMS'])
     addr=str(chosen_row['Research Address'] or chosen_row['Address'] or '').strip()
-    gm='https://www.google.com/maps/search/?api=1&query='+quote_plus((addr or str(chosen_row['TMS_CANONICAL'] or chosen_row['TMS']))+', Anderson County, SC')
-    l1,l2=st.columns(2); l1.link_button('🏛️ Exact County Parcel',cv,use_container_width=True); l2.link_button('🗺️ Google Maps',gm,use_container_width=True)
+    search_text=(addr or str(chosen_row['TMS_CANONICAL'] or chosen_row['TMS']))+', Anderson County, SC'
+    gm='https://www.google.com/maps/search/?api=1&query='+quote_plus(search_text)
+    if chosen in located_map.index:
+        lat=float(located_map.loc[chosen,'__lat']); lon=float(located_map.loc[chosen,'__lon'])
+        sv=f'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lon}'
+        gm_exact=f'https://www.google.com/maps/search/?api=1&query={lat},{lon}'
+    else:
+        sv='https://www.google.com/maps/search/?api=1&query='+quote_plus(search_text)
+        gm_exact=gm
+    zq='https://www.google.com/search?hl=en&q='+quote_plus('site:zillow.com/homedetails "'+addr+'" Anderson SC') if addr else 'https://www.zillow.com/anderson-sc/'
+    rq='https://www.google.com/search?hl=en&q='+quote_plus('site:realtor.com/realestateandhomes "'+addr+'" Anderson SC') if addr else 'https://www.realtor.com/realestateandhomes-search/Anderson-County_SC'
+    st.markdown('**Property links**')
+    l1,l2,l3=st.columns(3); l1.link_button('🏛️ Exact County Parcel',cv,use_container_width=True); l2.link_button('🗺️ Google Maps',gm_exact,use_container_width=True); l3.link_button('📍 Street View',sv,use_container_width=True)
+    l4,l5=st.columns(2); l4.link_button('🏠 Check Zillow',zq,use_container_width=True); l5.link_button('🏠 Check Realtor.com',rq,use_container_width=True)
     all_decisions=map_rows.copy(); all_decisions['Interested?']=all_decisions['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
     interested=all_decisions[all_decisions['Interested?']=='Yes'].copy()
     st.markdown(f"**Interested properties: {len(interested)} · Marked No: {(all_decisions['Interested?']=='No').sum()} · Not reviewed: {(all_decisions['Interested?']=='Undecided').sum()}**")
