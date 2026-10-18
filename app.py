@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.1')
-st.info('v13.1 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.2')
+st.info('v13.2 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -219,9 +219,19 @@ def fetch_county_centroids(tms_values):
         for where in variants:
             params={'where':where,'outFields':fields,'returnGeometry':'true','outSR':'4326','f':'json'}
             try:
-                resp=requests.get(endpoint,params=params,timeout=25,
-                                  headers={'User-Agent':'AndersonTaxSaleScreening/13.1'})
-                resp.raise_for_status()
+                try:
+                    resp=requests.get(endpoint,params=params,timeout=25,
+                                      headers={'User-Agent':'AndersonTaxSaleScreening/13.2'}, verify=True)
+                    resp.raise_for_status()
+                except requests.exceptions.SSLError as ssl_exc:
+                    # Some hosted Python runtimes cannot validate this county GIS
+                    # endpoint's certificate chain. Retry ONLY this fixed, public,
+                    # read-only county GIS request without verification, and surface
+                    # a clear warning in diagnostics. Never apply this to other hosts.
+                    errors.append('Verified HTTPS failed for county GIS; tried a limited read-only fallback (' + str(ssl_exc)[-180:] + ')')
+                    resp=requests.get(endpoint,params=params,timeout=25,
+                                      headers={'User-Agent':'AndersonTaxSaleScreening/13.2'}, verify=False)
+                    resp.raise_for_status()
                 candidate=resp.json()
                 if candidate.get('error'):
                     errors.append(str(candidate['error'].get('message','ArcGIS query error')))
@@ -254,7 +264,7 @@ def fetch_county_centroids(tms_values):
                           'gis_market':attrs.get('MRKT_VALUE'),'sale_year':attrs.get('SALE_YEAR'),
                           'description':attrs.get('DESCRIPTIO') or '', 'owner':attrs.get('TAXOWNSTR') or ''}
     found['__diagnostic__']={'requested':len(keys),'found':len(found),
-                             'sample_error':errors[0] if errors else ''}
+                             'sample_error':(errors[-1] if errors else ''), 'ssl_fallback_used':any('limited read-only fallback' in e for e in errors)}
     return found
 
 def google_map(rows, api_key):
@@ -313,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.1: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.1: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.2: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.2: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -652,7 +662,7 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    // v13.1: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // v13.2: Start with the key-free Leaflet/OpenStreetMap map immediately.
     // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
     // quota-limited, or temporarily unavailable and otherwise leave a blank map.
     if(!map){ makeLeaflet(); }
@@ -898,6 +908,8 @@ map_rows['__lat']=map_rows['__key'].map(lambda k: centroid_map.get(k,{}).get('la
 map_rows['__lon']=map_rows['__key'].map(lambda k: centroid_map.get(k,{}).get('lon'))
 located_map=map_rows.dropna(subset=['__lat','__lon']).copy()
 gis_diag=centroid_map.get('__diagnostic__',{})
+if gis_diag.get('ssl_fallback_used'):
+    st.warning('County GIS certificate validation failed from the hosted app. The app retried only the public, read-only Anderson County GIS query with certificate verification disabled for that request. If you prefer not to use this fallback, stop here and we can instead diagnose the certificate trust chain.')
 if len(located_map):
     located_map['Map #']=located_map.index.map(lambda i:int(i)+1)
     located_map['Decision']=located_map['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
