@@ -9,7 +9,7 @@ COUNTY='https://www.andersoncountysc.org/'
 VIEWER='https://propertyviewer.andersoncountysc.org/'
 ACPASS='https://acpass.andersoncountysc.org/'
 GIS='https://propertyviewer.andersoncountysc.org/arcgis/rest/services'
-PARCEL_PRIMARY=f'{GIS}/Opengov/MAT/MapServer/13/query'
+PARCEL_PRIMARY=f'{GIS}/NewPropertyViewer/MapServer/5/query'
 PARCEL_FALLBACK=f'{GIS}/NewPropertyViewer/MapServer/5/query'
 PARCEL_CLASS=f'{GIS}/CartegraphOMS/Parcels/MapServer/0/query'
 SSAP_QUERY=f'{GIS}/QueryMap/MapServer/0/query'
@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v12.0')
-st.info('v12.0 fixes blank-map startup by loading a key-free map first and keeps map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v12.1')
+st.info('v12.1 uses the current NewPropertyViewer parcel layer as the primary GIS source, retains the secondary parcel-layer fallback, and starts a key-free map first. It keeps map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -233,7 +233,7 @@ def google_map(rows, api_key):
             'web_sqft':row.get('Web Sqft') if pd.notna(row.get('Web Sqft')) else None,
         })
     data_json=json.dumps(payload,ensure_ascii=False).replace('</','<\\/')
-    parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Opengov/MAT/MapServer/13/query'
+    parcel_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/NewPropertyViewer/MapServer/5/query'
     class_url='https://propertyviewer.andersoncountysc.org/arcgis/rest/services/CartegraphOMS/Parcels/MapServer/0/query'
     html_doc = '''<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -575,7 +575,7 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    // v12.0: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // v12.1: Start with the key-free Leaflet/OpenStreetMap map immediately.
     // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
     // quota-limited, or temporarily unavailable and otherwise leave a blank map.
     if(!map){ makeLeaflet(); }
