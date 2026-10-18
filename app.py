@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.0')
-st.info('v13.0 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.1')
+st.info('v13.1 replaces the fragile embedded JavaScript map with a native Streamlit map and server-side county GIS lookups. It includes property review controls and CSV exports for all properties and your Interested list.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -191,41 +191,70 @@ def property_cross_reference(address, tms=''):
             'evidence_sources':[],'mobile_sources':[],'beds':None,'baths':None,'sqft':None,
             'mobile':False,'snippet':'No direct public property page with matching address was reachable.'}
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_county_centroids(tms_values):
-    """Fetch parcel geometries from Anderson County GIS in batches and return WGS84 centroids."""
-    import time
+    """Fetch parcel geometries by both dashed and digits-only TMS forms.
+
+    The tax-sale spreadsheet normalizes TMS to 123-45-67-890, while the county
+    GIS viewer/query layer commonly indexes the same value without dashes. The
+    earlier v13.0 implementation mistakenly sent only dashed values in its IN
+    query, which could return zero features even when the parcels existed.
+    """
     endpoint=f'{GIS}/NewPropertyViewer/MapServer/5/query'
-    wanted={normalized_key(v):str(v) for v in tms_values if normalized_key(v)}
+    wanted={normalized_key(v):canonical_tms(v) for v in tms_values if normalized_key(v)}
     found={}
-    vals=list(wanted.values())
-    # The county layer accepts TMS values as text; use short IN batches to avoid URL limits.
-    for start in range(0,len(vals),20):
-        batch=vals[start:start+20]
-        quoted=','.join("'"+str(v).replace("'","''")+"'" for v in batch)
-        params={'where':f'TMS IN ({quoted})','outFields':'TMS,PHYS_ADDR,MRKT_VALUE,SALE_YEAR,DESCRIPTIO,TAXOWNSTR','returnGeometry':'true','outSR':'4326','f':'json'}
-        try:
-            resp=requests.get(endpoint,params=params,timeout=25,headers={'User-Agent':'AndersonTaxSaleScreening/13.0'})
-            resp.raise_for_status(); payload=resp.json()
-            for feat in payload.get('features',[]):
-                attrs=feat.get('attributes') or {}; geom=feat.get('geometry') or {}
-                k=normalized_key(attrs.get('TMS',''))
-                if not k or k not in wanted: continue
-                # Geometry may be polygon rings or a point. Average outer-ring vertices is a stable display point.
-                if 'x' in geom and 'y' in geom:
-                    lon,lat=float(geom['x']),float(geom['y'])
-                else:
-                    rings=geom.get('rings') or []
-                    pts=rings[0] if rings else []
-                    if not pts: continue
-                    lon=sum(float(pt[0]) for pt in pts)/len(pts); lat=sum(float(pt[1]) for pt in pts)/len(pts)
-                if -90<=lat<=90 and -180<=lon<=180:
-                    found[k]={'lat':lat,'lon':lon,'gis_address':attrs.get('PHYS_ADDR') or '',
-                              'gis_market':attrs.get('MRKT_VALUE'),'sale_year':attrs.get('SALE_YEAR'),
-                              'description':attrs.get('DESCRIPTIO') or '', 'owner':attrs.get('TAXOWNSTR') or ''}
-        except Exception:
-            # Keep processing other batches; the UI reports how many could not be mapped.
+    keys=list(wanted.keys())
+    errors=[]
+    fields='TMS,PHYS_ADDR,MRKT_VALUE,SALE_YEAR,DESCRIPTIO,TAXOWNSTR'
+    for start in range(0,len(keys),20):
+        batch=keys[start:start+20]
+        variants=[]
+        # Try both representations because the ArcGIS service's TMS field has
+        # appeared in dashed and undashed form in different county services.
+        for values in (batch, [wanted[k] for k in batch]):
+            quoted=','.join("'"+str(v).replace("'","''")+"'" for v in values)
+            where=f'TMS IN ({quoted})'
+            if where not in variants: variants.append(where)
+        payload=None
+        for where in variants:
+            params={'where':where,'outFields':fields,'returnGeometry':'true','outSR':'4326','f':'json'}
+            try:
+                resp=requests.get(endpoint,params=params,timeout=25,
+                                  headers={'User-Agent':'AndersonTaxSaleScreening/13.1'})
+                resp.raise_for_status()
+                candidate=resp.json()
+                if candidate.get('error'):
+                    errors.append(str(candidate['error'].get('message','ArcGIS query error')))
+                    continue
+                payload=candidate
+                # If the first representation returns matches, no need to ask
+                # the service for the alternate spelling for this batch.
+                if candidate.get('features'):
+                    break
+            except Exception as exc:
+                errors.append(type(exc).__name__ + ': ' + str(exc)[:180])
+        if not payload:
             continue
+        for feat in payload.get('features',[]):
+            attrs=feat.get('attributes') or {}; geom=feat.get('geometry') or {}
+            k=normalized_key(attrs.get('TMS',''))
+            if not k or k not in wanted or k in found: continue
+            if 'x' in geom and 'y' in geom:
+                lon,lat=float(geom['x']),float(geom['y'])
+            else:
+                rings=geom.get('rings') or []
+                pts=rings[0] if rings else []
+                if not pts: continue
+                lon=sum(float(pt[0]) for pt in pts)/len(pts)
+                lat=sum(float(pt[1]) for pt in pts)/len(pts)
+            # Reject coordinates that were returned in the county's projected
+            # feet-based spatial reference despite the outSR request.
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                found[k]={'lat':lat,'lon':lon,'gis_address':attrs.get('PHYS_ADDR') or '',
+                          'gis_market':attrs.get('MRKT_VALUE'),'sale_year':attrs.get('SALE_YEAR'),
+                          'description':attrs.get('DESCRIPTIO') or '', 'owner':attrs.get('TAXOWNSTR') or ''}
+    found['__diagnostic__']={'requested':len(keys),'found':len(found),
+                             'sample_error':errors[0] if errors else ''}
     return found
 
 def google_map(rows, api_key):
@@ -284,7 +313,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.0: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.0: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.1: waiting for JavaScript to respond…</div><script>(function(){var startedAt=Date.now();var status=function(msg){var e=document.getElementById("status");if(e)e.innerHTML=msg;};status("Map diagnostic v13.1: JavaScript is running; checking map startup…");window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status("<b style=\"color:#a40000\">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.");}else if(!d.leaflet){status("<b style=\"color:#a40000\">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.");}},12000);})();</script><div id="interestPanel" style="position:absolute;z-index:500;left:12px;top:150px;max-width:90%;background:white;color:#222;padding:9px 12px;border-radius:10px;box-shadow:0 2px 12px #0002;font-size:13px"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -623,7 +652,7 @@ async function start(){
   try{
     // Initialize the base map immediately so the user never sees a blank map while
     // county GIS and fallback matching are still running.
-    // v13.0: Start with the key-free Leaflet/OpenStreetMap map immediately.
+    // v13.1: Start with the key-free Leaflet/OpenStreetMap map immediately.
     // Do not wait for Google Maps JavaScript API: demo keys can be restricted,
     // quota-limited, or temporarily unavailable and otherwise leave a blank map.
     if(!map){ makeLeaflet(); }
@@ -856,7 +885,7 @@ def risk_for(row):
     return ' / '.join(flags) if flags else 'LOWER AUTOMATED RISK'
 r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.sort_values(['Deal Score','Bid/Market'],ascending=[False,True])
 
-m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Browser'); m3.metric('Tax-sale parcels',len(r))
+m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
 st.caption('Version 13.0 uses Streamlit’s native map instead of a custom JavaScript iframe. Map numbers match the second spreadsheet column; the county Item number remains first. Select a property below to mark Interested? Yes or No.')
@@ -868,6 +897,7 @@ map_rows['__key']=map_rows['TMS_KEY'].astype(str)
 map_rows['__lat']=map_rows['__key'].map(lambda k: centroid_map.get(k,{}).get('lat'))
 map_rows['__lon']=map_rows['__key'].map(lambda k: centroid_map.get(k,{}).get('lon'))
 located_map=map_rows.dropna(subset=['__lat','__lon']).copy()
+gis_diag=centroid_map.get('__diagnostic__',{})
 if len(located_map):
     located_map['Map #']=located_map.index.map(lambda i:int(i)+1)
     located_map['Decision']=located_map['__key'].map(lambda k:st.session_state.property_decisions_v13.get(k,'Undecided'))
@@ -876,6 +906,8 @@ if len(located_map):
     st.caption(f'County GIS returned locations for {len(located_map)} of {len(map_rows)} currently filtered properties. The native map shows all located properties; use the selector below to review one at a time.')
 else:
     st.warning('The county GIS did not return coordinates for these rows in this attempt. The property review controls and county parcel links below are still available.')
+if gis_diag.get('sample_error'):
+    st.caption('GIS query diagnostic: ' + str(gis_diag['sample_error'])[:250])
 if len(map_rows):
     options=map_rows.index.tolist()
     chosen=st.selectbox('Choose a property to review',options,format_func=lambda i:f"Map #{int(i)+1} · {map_rows.loc[i,'TMS_CANONICAL'] or map_rows.loc[i,'TMS']} · {map_rows.loc[i,'Owner'] or 'Unknown owner'} · {map_rows.loc[i,'Research Address'] or map_rows.loc[i,'Address']}",key='native_map_property_choice')
