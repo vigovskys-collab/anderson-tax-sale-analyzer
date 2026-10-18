@@ -30,8 +30,8 @@ st.markdown('''<style>
 </style>''',unsafe_allow_html=True)
 
 st.title('🏠 Anderson County SC Tax Sale')
-st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.8')
-st.info('v11.8 adds map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
+st.caption('2026 tax-sale screening • County GIS + property identification engine • v11.9')
+st.info('v11.9 adds map-based property decisions: mark Yes to keep a property in your interested list, or No to mark it black and exclude it from the interested list. Export your selected properties to a spreadsheet from the map panel.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -327,14 +327,14 @@ function csvEscape(v){let s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
 function downloadCSV(rows,filename){const cols=['Interested','County Item #','Map #','TMS','Owner','Property Description / Address','City','Acres','Bedrooms','Bathrooms','Square Feet','Starting Bid','Assessed Value','GIS Market Value','Tax Year','Property Type','Land Use','Zoning','E911 Type','E911 Subtype','County Mobile Home #','Latitude','Longitude','County Parcel URL','Google Maps URL','Street View URL'];const lines=[cols.map(csvEscape).join(',')];rows.forEach(q=>{const x=q.x,p=q.p,c=q.c,d=decisionFor(x);const vals=[d==='yes'?'Yes':(d==='no'?'No':'Undecided'),x.item,x.map_no,x.tms,x.owner,x.research_address||p.PHYS_ADDR||x.address,x.city,x.acres,x.beds,x.baths,x.sqft,x.opening_bid??x.bid,x.assessed,x.gis_market,x.tax_year,x.sale_type,x.land_use,x.zone1,x.ssap_type,x.ssap_subtype,x.mh_num,c.lat,c.lng,countyUrl(x.tms),googleUrl(Object.assign({},x,{address:x.research_address||x.address}),c),streetUrl(Object.assign({},x,{address:x.research_address||x.address}),c)];lines.push(vals.map(csvEscape).join(','));});const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 function renderInterestedPanel(){const host=document.getElementById('interestPanel');if(!host)return;const yes=locatedPoints.filter(q=>decisionFor(q.x)==='yes');const no=locatedPoints.filter(q=>decisionFor(q.x)==='no');host.innerHTML=`<div style="font-weight:700">Interested: ${yes.length} · No: ${no.length} · Not reviewed: ${Math.max(0,locatedPoints.length-yes.length-no.length)}</div><div class="interest-tools"><button id="downloadInterested">⬇ Download Interested CSV</button><button id="downloadAll">⬇ Download all properties CSV</button></div><div style="max-height:130px;overflow:auto;margin-top:6px;border-top:1px solid #ddd;padding-top:5px"><b>Interested properties</b>${yes.length?yes.map(q=>`<div style="padding:3px 0;border-bottom:1px solid #eee"><b>County #${esc(q.x.item||'—')} · Map ${esc(q.x.map_no)}</b> — ${esc(q.x.tms)}<br>${esc(q.x.owner||'Owner unknown')} · ${esc(q.x.research_address||q.x.address||'No address')}</div>`).join(''):'<div>No properties marked Yes yet. Tap a map dot to review it.</div>'}</div><div style="font-size:12px;margin-top:5px">Choices are saved in this browser when storage is available. Download the spreadsheet regularly as a backup.</div>`;document.getElementById('downloadInterested').onclick=()=>downloadCSV(yes,'anderson_interested_properties.csv');document.getElementById('downloadAll').onclick=()=>downloadCSV(locatedPoints,'anderson_all_reviewed_properties.csv');}
 document.addEventListener('click',e=>{const b=e.target.closest('button[data-choice]');if(!b)return;const k=b.getAttribute('data-key'),val=b.getAttribute('data-choice');const x=S.data.find(z=>String(z.key)===String(k));if(x)setDecision(x,val);});
-function jsonp(url,timeout=30000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
+function jsonp(url,timeout=9000){return new Promise((resolve,reject)=>{const cb='ac_ts_'+Date.now()+'_'+Math.floor(Math.random()*1000000);const script=document.createElement('script');let done=false;const timer=setTimeout(()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS request timed out.'));},timeout);function cleanup(){clearTimeout(timer);delete window[cb];script.remove();}window[cb]=data=>{if(done)return;done=true;cleanup();if(data&&data.error)reject(new Error(data.error.message||'County GIS returned an error.'));else resolve(data);};script.onerror=()=>{if(done)return;done=true;cleanup();reject(new Error('County GIS blocked the browser request.'));};script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;document.head.appendChild(script);});}
 function chunks(a,n){const out=[];for(let i=0;i<a.length;i+=n)out.push(a.slice(i,i+n));return out;}
 async function queryClassBatch(keys){
   const safe=tmsVariants(keys);
   if(!safe.length)return [];
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
   const u=S.classParcel+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent('TMS,CLASS,IMPRV,RATIO')+'&returnGeometry=false&f=json';
-  const j=await jsonp(u); return j.features||[];
+  const j=await jsonp(u,9000); return j.features||[];
 }
 async function queryParcelBatch(keys){
   const safe=tmsVariants(keys);
@@ -346,7 +346,10 @@ async function queryParcelBatch(keys){
     S.parcelFallback+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&geometryPrecision=6&maxAllowableOffset=0.0002&f=json'
   ];
   const all=[];
-  for(const u of urls){try{const j=await jsonp(u); all.push(...(j.features||[]));}catch(e){console.warn('parcel source',e);}}
+  // Query both parcel services in parallel with a short timeout so one slow layer
+  // cannot hold up every batch on a mobile browser.
+  const results=await Promise.all(urls.map(async u=>{try{const j=await jsonp(u,9000);return j.features||[];}catch(e){console.warn('parcel source',e);return [];}}));
+  results.forEach(fs=>all.push(...fs));
   const seen=new Set(),out=[];
   for(const f of all){const k=key((f.attributes||{}).TMS);if(!k||seen.has(k))continue;seen.add(k);out.push(f);}
   return out;
@@ -355,7 +358,7 @@ async function queryAuxBatch(keys){
   const safe=tmsVariants(keys);
   if(!safe.length)return {ssap:[],land:[],zone:[]};
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
-  const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
+  const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u,9000);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
   // Query BOTH county E911/SSAP layers for every batch. The primary layer can
   // return some matches while omitting other TMS values, so using the fallback
   // only when the entire primary response is empty silently loses properties.
@@ -386,13 +389,25 @@ function centroid(geom){
   return n?{lat:sy/n,lng:sx/n}:null;
 }
 async function locate(){
-  const all=[]; const ssapAll=[]; const landAll=[]; const zoneAll=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,20);
-  for(let i=0;i<batches.length;i++){
-    document.getElementById('status').innerHTML=`Loading county property evidence… <b>${i+1}</b> of <b>${batches.length}</b>`;
-    try{const fs=await queryParcelBatch(batches[i]); all.push(...fs);}catch(e){console.warn(e);}
-    try{const a=await queryAuxBatch(batches[i]); ssapAll.push(...a.ssap); landAll.push(...a.land); zoneAll.push(...a.zone);}catch(e){console.warn('aux',e);}
-  }
-  let classFeatures=[]; try{for(const b of batches){const fs=await queryClassBatch(b);classFeatures.push(...fs);}}catch(e){console.warn('CLASS lookup',e);}
+  const all=[]; const ssapAll=[]; const landAll=[]; const zoneAll=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,50);
+  // Process batches concurrently; the previous serial loop could spend several
+  // minutes waiting on each county service in turn on a phone.
+  let batchDone=0;
+  await Promise.all(batches.map(async (batch)=>{
+    try{
+      const [fs,a]=await Promise.all([
+        queryParcelBatch(batch).catch(e=>{console.warn('parcel batch',e);return []; }),
+        queryAuxBatch(batch).catch(e=>{console.warn('aux batch',e);return {ssap:[],land:[],zone:[]};})
+      ]);
+      all.push(...fs); ssapAll.push(...a.ssap); landAll.push(...a.land); zoneAll.push(...a.zone);
+    } finally {
+      batchDone++;
+      document.getElementById('status').innerHTML=`Loading county property evidence… <b>${batchDone}</b> of <b>${batches.length}</b> batches`;
+    }
+  }));
+  let classFeatures=[];
+  try { classFeatures=(await Promise.all(batches.map(b=>queryClassBatch(b).catch(e=>{console.warn('CLASS lookup',e);return [];})))).flat(); }
+  catch(e){console.warn('CLASS lookup',e);}
   const classByKey=new Map(classFeatures.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
   const ssapByKey=new Map(); for(const f of ssapAll){const a=Object.assign({},f.attributes||{},{__geometry:f.geometry||null}); const k=key(a.TMS); if(!k)continue; if(!ssapByKey.has(k))ssapByKey.set(k,[]); ssapByKey.get(k).push(a);}
   const landByKey=new Map(landAll.map(f=>[key((f.attributes||{}).TMS),f.attributes||{}]));
