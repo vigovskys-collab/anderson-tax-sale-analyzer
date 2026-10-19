@@ -31,7 +31,7 @@ st.markdown('''<style>
 
 st.title('🏠 Anderson County SC Tax Sale')
 st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.6')
-st.info('v13.9 keeps the review panel below the map and refreshes Leaflet sizing after the map container is resized.')
+st.info('v14.0 keeps the review panel below the map and refreshes Leaflet sizing after the map container is resized.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -323,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.9: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.9: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
+<div id="map"></div><div id="status">Map diagnostic v14.0: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v14.0: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -344,7 +344,7 @@ if(window.__taxsaleDiag)window.__taxsaleDiag.main=true;const S=window.TAXSALE; l
 const byKey=new Map(S.data.map(x=>[key(x.key),x]));
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function key(x){let d=String(x??'').replace(/[^0-9]/g,''); if(d.length===10 && d[0]==='0') d=d.slice(1); return d;}
-function tmsVariants(keys){const out=new Set(); keys.forEach(v=>{const d=String(v??'').replace(/[^0-9]/g,''); if(!d)return; out.add(d); if(d.length===10 && d[0]==='0')out.add(d.slice(1)); else if(d.length===9)out.add('0'+d);}); return [...out];}
+function tmsVariants(keys){const out=new Set(); keys.forEach(v=>{const d=String(v??'').replace(/[^0-9]/g,''); if(!d)return; out.add(d); let full=d; if(full.length===9)full='0'+full; if(full.length===10){out.add(full);out.add(full.slice(0,3)+'-'+full.slice(3,5)+'-'+full.slice(5,7)+'-'+full.slice(7)); if(full[0]==='0')out.add(full.slice(1));}}); return [...out];}
 function countyUrl(tms){return 'https://propertyviewer.andersoncountysc.org/mapsjs/?TMS='+encodeURIComponent(key(tms))+'&disclaimer=false';}
 function googleUrl(x,c){return c?('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(c.lat+','+c.lng)):('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((x.address||'')+', Anderson County, SC'));}
 function streetUrl(x,c){return c?('https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='+encodeURIComponent(c.lat+','+c.lng)+'&heading=0&pitch=0&fov=90'):('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent((x.address||'')+', Anderson County, SC'));}
@@ -433,9 +433,9 @@ async function queryParcelBatch(keys){
     S.parcelFallback+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry=true&outSR=4326&geometryPrecision=6&maxAllowableOffset=0.0002&f=json'
   ];
   const all=[];
-  // Query both parcel services in parallel with a short timeout so one slow layer
-  // cannot hold up every batch on a mobile browser.
-  const results=await Promise.all(urls.map(async u=>{try{const j=await jsonp(u,5000);return j.features||[];}catch(e){console.warn('parcel source',e);return [];}}));
+  // Query both parcel services, retry transient browser/network failures, and
+  // include both dashed and digits-only TMS spellings in the same query.
+  const results=await Promise.all(urls.map(async u=>{for(let attempt=0;attempt<2;attempt++){try{const j=await jsonp(u,10000);return j.features||[];}catch(e){console.warn('parcel source attempt '+(attempt+1),e);if(attempt===1)return [];await new Promise(r=>setTimeout(r,350));}}return [];}));
   results.forEach(fs=>all.push(...fs));
   const seen=new Set(),out=[];
   for(const f of all){const k=key((f.attributes||{}).TMS);if(!k||seen.has(k))continue;seen.add(k);out.push(f);}
@@ -445,7 +445,7 @@ async function queryAuxBatch(keys){
   const safe=tmsVariants(keys);
   if(!safe.length)return {ssap:[],land:[],zone:[]};
   const where='TMS IN ('+safe.map(k=>"'"+k+"'").join(',')+')';
-  const q=async(base,fields,geometry=false)=>{try{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';const j=await jsonp(u,5000);return j.features||[];}catch(e){console.warn('aux lookup',e);return [];}};
+  const q=async(base,fields,geometry=false)=>{const u=base+'?where='+encodeURIComponent(where)+'&outFields='+encodeURIComponent(fields)+'&returnGeometry='+geometry+'&outSR=4326&f=json';for(let attempt=0;attempt<2;attempt++){try{const j=await jsonp(u,10000);return j.features||[];}catch(e){console.warn('aux lookup attempt '+(attempt+1),e);if(attempt===1)return [];await new Promise(r=>setTimeout(r,350));}}return [];};
   // Query BOTH county E911/SSAP layers for every batch. The primary layer can
   // return some matches while omitting other TMS values, so using the fallback
   // only when the entire primary response is empty silently loses properties.
@@ -476,12 +476,12 @@ function centroid(geom){
   return n?{lat:sy/n,lng:sx/n}:null;
 }
 async function locate(){
-  const all=[]; const ssapAll=[]; const landAll=[]; const zoneAll=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,50);
+  const all=[]; const ssapAll=[]; const landAll=[]; const zoneAll=[]; const ks=S.data.map(x=>key(x.key)).filter(Boolean); const batches=chunks(ks,25);
   // Process batches concurrently; the previous serial loop could spend several
   // minutes waiting on each county service in turn on a phone.
   let batchDone=0;
-  await Promise.all(batches.map(async (batch)=>{
-    try{
+  let batchIndex=0;
+  async function batchWorker(){while(batchIndex<batches.length){const batch=batches[batchIndex++];try{
       const [fs,a]=await Promise.all([
         queryParcelBatch(batch).catch(e=>{console.warn('parcel batch',e);return []; }),
         queryAuxBatch(batch).catch(e=>{console.warn('aux batch',e);return {ssap:[],land:[],zone:[]};})
@@ -490,8 +490,8 @@ async function locate(){
     } finally {
       batchDone++;
       document.getElementById('status').innerHTML=`Loading county property evidence… <b>${batchDone}</b> of <b>${batches.length}</b> batches`;
-    }
-  }));
+    }}}
+  await Promise.all(Array.from({length:Math.min(2,batches.length)},()=>batchWorker()));
   let classFeatures=[];
   try { classFeatures=(await Promise.all(batches.map(b=>queryClassBatch(b).catch(e=>{console.warn('CLASS lookup',e);return [];})))).flat(); }
   catch(e){console.warn('CLASS lookup',e);}
@@ -905,7 +905,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.9: keeps the Interested/No/Not reviewed panel below the Leaflet map and recalculates map size after layout changes. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
+st.caption('Version 14.0: keeps the review panel below the Leaflet map and improves GIS matching by trying dashed and digits-only TMS values, retrying slow county requests, and limiting request concurrency. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
 # Use the existing browser-side Leaflet implementation: unlike the native map,
 # its point popups contain the links and Yes/No controls and save choices locally.
 # It also queries the county's parcel and E911 layers directly from the browser,
