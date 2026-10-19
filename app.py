@@ -31,7 +31,7 @@ st.markdown('''<style>
 
 st.title('🏠 Anderson County SC Tax Sale')
 st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.6')
-st.info('v13.8 keeps the review panel below the map and refreshes Leaflet sizing after the map container is resized.')
+st.info('v13.9 keeps the review panel below the map and refreshes Leaflet sizing after the map container is resized.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -323,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.8: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.8: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.9: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.9: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -586,7 +586,7 @@ async function locate(){
   return out;
 }
 function makeLeaflet(){
-  map=L.map('map',{zoomControl:true,scrollWheelZoom:true,tap:true}).setView([34.5034,-82.6501],10);
+  map=L.map('map',{zoomControl:false,scrollWheelZoom:true,tap:true}).setView([34.5034,-82.6501],10);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
   map.on('click',e=>{const q=nearestLeaflet(e.latlng);if(q){const m=markers.find(mm=>mm._taxPoint===q);if(m&&m.openPopup)m.openPopup();}});
   // The iframe/map height changed to put the review panel below the map.
@@ -596,7 +596,7 @@ function makeLeaflet(){
 function makeGoogle(){
   if(!S.googleKey)return false;
   try{
-    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy',clickableIcons:false});
+    map=new google.maps.Map(document.getElementById('map'),{center:{lat:34.5034,lng:-82.6501},zoom:10,zoomControl:false,mapTypeControl:true,streetViewControl:true,fullscreenControl:true,gestureHandling:'greedy',clickableIcons:false});
     info=new google.maps.InfoWindow();googleMode=true;
     // Android touch fallback: tapping the map near a marker selects the nearest property.
     map.addListener('click',e=>{
@@ -905,7 +905,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.8: keeps the Interested/No/Not reviewed panel below the Leaflet map and recalculates map size after layout changes. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
+st.caption('Version 13.9: keeps the Interested/No/Not reviewed panel below the Leaflet map and recalculates map size after layout changes. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
 # Use the existing browser-side Leaflet implementation: unlike the native map,
 # its point popups contain the links and Yes/No controls and save choices locally.
 # It also queries the county's parcel and E911 layers directly from the browser,
