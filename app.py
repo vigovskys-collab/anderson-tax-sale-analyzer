@@ -31,7 +31,7 @@ st.markdown('''<style>
 
 st.title('🏠 Anderson County SC Tax Sale')
 st.caption('2026 tax-sale screening • County GIS + property identification engine • v13.6')
-st.info('v13.6 restores the clickable Leaflet map popups with property links, Interested Yes/No buttons, and CSV downloads inside the map.')
+st.info('v13.8 keeps the review panel below the map and refreshes Leaflet sizing after the map container is resized.')
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def get_xlsx():
@@ -323,7 +323,7 @@ html,body,#map{height:100%;margin:0;font-family:system-ui,-apple-system,sans-ser
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head><body>
-<div id="map"></div><div id="status">Map diagnostic v13.7: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.7: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
+<div id="map"></div><div id="status">Map diagnostic v13.8: waiting for JavaScript to respond…</div><script>(function(){var status=function(msg){var e=document.getElementById('status');if(e)e.innerHTML=msg;};status('Map diagnostic v13.8: JavaScript is running; checking map startup…');window.__taxsaleDiag={boot:true,leaflet:false,main:false};setTimeout(function(){var d=window.__taxsaleDiag||{};if(!d.main){status('<b style="color:#a40000">Map startup diagnostic: the main map script did not finish initializing.</b><br>This is before county property lookups. Please send this exact message to ChatGPT.');}else if(!d.leaflet){status('<b style="color:#a40000">Map startup diagnostic: the map script ran, but Leaflet did not load.</b><br>Try Chrome or switch Wi-Fi/mobile data, then refresh.');}},12000);})();</script><div id="interestPanel" style="position:relative;z-index:1;width:auto;max-width:none;margin:12px;padding:10px 12px;background:white;color:#222;border:1px solid #ddd;border-radius:10px;box-shadow:0 1px 4px #0001;font-size:13px;box-sizing:border-box"></div>
 <div id="filterBox"><label for="improvementFilter"><b>Map points:</b></label> <select id="improvementFilter"><option value="all">All</option><option value="land">Land evidence</option><option value="house">House / structure</option><option value="mobile">Mobile home</option><option value="unknown">Unknown</option></select></div>
 <div class="legend"><div><span class="dot land"></span>Land evidence</div><div><span class="dot house"></span>House / structure</div><div><span class="dot mobile"></span>Mobile home</div><div><span class="dot unknown"></span>Unknown</div></div>
 <script>window.TAXSALE={data:__DATA__,parcel:__PARCEL__,parcelFallback:__PARCEL_FALLBACK__,classParcel:__CLASS__,ssap:__SSAP__,ssapFallback:__SSAP_FALLBACK__,landuse:__LANDUSE__,zoning:__ZONING__,googleKey:__KEY__};</script>
@@ -589,6 +589,9 @@ function makeLeaflet(){
   map=L.map('map',{zoomControl:true,scrollWheelZoom:true,tap:true}).setView([34.5034,-82.6501],10);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
   map.on('click',e=>{const q=nearestLeaflet(e.latlng);if(q){const m=markers.find(mm=>mm._taxPoint===q);if(m&&m.openPopup)m.openPopup();}});
+  // The iframe/map height changed to put the review panel below the map.
+  // Recalculate Leaflet's dimensions after the browser has laid out the iframe.
+  setTimeout(()=>{if(map)map.invalidateSize(true);},250);
 }
 function makeGoogle(){
   if(!S.googleKey)return false;
@@ -669,7 +672,11 @@ async function start(){
     document.getElementById('status').innerHTML='Map opened (no Google key required). Loading county property locations…';
     locatedPoints=await locate();
     document.getElementById('status').innerHTML='<span class="good"><b>County lookups complete.</b></span> Drawing property points…';
-    document.getElementById('improvementFilter').addEventListener('change',renderMarkers);renderMarkers();renderInterestedPanel();
+    document.getElementById('improvementFilter').addEventListener('change',renderMarkers);
+    // Make Leaflet recalculate the fixed-height map container before fitting all points.
+    map.invalidateSize(true);
+    renderMarkers();renderInterestedPanel();
+    setTimeout(()=>{if(map){map.invalidateSize(true);renderMarkers();}},500);
     const land=locatedPoints.filter(q=>category(q.x,q.p)==='land').length; const house=locatedPoints.filter(q=>category(q.x,q.p)==='house').length; const mobile=locatedPoints.filter(q=>category(q.x,q.p)==='mobile').length; const unknown=locatedPoints.filter(q=>category(q.x,q.p)==='unknown').length;
     setTimeout(()=>{const missing=unlocatedRows.length?`<details open style="margin-top:8px;text-align:left"><summary style="cursor:pointer;padding:8px 4px;font-size:14px;font-weight:bold">Show ${unlocatedRows.length} properties not located (tap a link below)</summary><div style="max-height:42vh;overflow-y:auto;-webkit-overflow-scrolling:touch;font-size:13px;background:#fff;color:#222;border:1px solid #bbb;border-radius:6px;padding:5px">${unlocatedRows.map(x=>{const t=String(x.tms||'').replace(/[^0-9]/g,'');const county=t?`https://propertyviewer.andersoncountysc.org/mapsjs/?TMS=${encodeURIComponent(t)}&disclaimer=false`:'https://propertyviewer.andersoncountysc.org/mapsjs/';const q=encodeURIComponent([x.tms,x.address,x.owner,'Anderson SC'].filter(Boolean).join(' '));return `<div style="padding:8px 4px;border-bottom:1px solid #ddd;overflow-wrap:anywhere"><b>${esc(x.tms||'TMS missing')}</b><br>${esc(x.address||'No description/address')}<br>${esc(x.owner||'Owner not listed')}<br><a style="display:inline-block;padding:6px 8px;margin:4px 4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="${county}">Open county parcel</a><a style="display:inline-block;padding:6px 8px;margin:4px 0 0;background:#e8f0fe;border-radius:4px;color:#174ea6;text-decoration:underline" target="_blank" rel="noopener" href="https://www.google.com/search?q=${q}">Search property</a></div>`}).join('')}</div></details>`:'<div>All listed TMS keys were located.</div>';document.getElementById('status').innerHTML=`<span class="good"><b>${locatedPoints.length}</b> of <b>${S.data.length}</b> tax-sale rows located • <b>${land}</b> land/other • <b>${house}</b> house indicated • <b>${mobile}</b> mobile • <b>${unknown}</b> unknown${missing}`;},500);
   }catch(e){document.getElementById('status').innerHTML=`<span class="bad"><b>County parcel lookup stopped.</b></span><br>${esc(e.message)}<br>Refresh the page to retry. The base map should remain visible.<br><a href="https://propertyviewer.andersoncountysc.org/mapsjs/" target="_blank">Open Anderson County Property Viewer</a>`;}
@@ -898,7 +905,7 @@ r['Deal Score']=r.apply(score,axis=1); r['Risk']=r.apply(risk_for,axis=1); r=r.s
 m1,m2,m3=st.columns(3); m1.metric('Matches',len(r)); m2.metric('GIS mode','Server-side'); m3.metric('Tax-sale parcels',len(r))
 
 st.subheader('🗺️ Property Map and Review')
-st.caption('Version 13.7: moved the Interested/No/Not reviewed panel below the Leaflet map with clickable property popups. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
+st.caption('Version 13.8: keeps the Interested/No/Not reviewed panel below the Leaflet map and recalculates map size after layout changes. Tap a dot to see property details and links, mark Interested Yes/No, and download the Interested list or all located properties. The selector below the map remains available in the research section if needed.')
 # Use the existing browser-side Leaflet implementation: unlike the native map,
 # its point popups contain the links and Yes/No controls and save choices locally.
 # It also queries the county's parcel and E911 layers directly from the browser,
